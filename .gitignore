@@ -1,0 +1,27 @@
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+
+# Environment
+.env*
+venv/
+.venv/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Distribution
+*.egg-info/
+dist/
+build/
+
+# Alembic
+alembic/versions/__pycache__/
+
+# OS
+.DS_Store
+Thumbs.db
