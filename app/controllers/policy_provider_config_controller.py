@@ -14,10 +14,17 @@ def create_provider(db: Session, payload: PolicyProviderCreate):
         "steps": [s.model_dump() for s in payload.steps],
         "required_fields": payload.required_fields,
     }
-    provider = PolicyProviderConfig(name=payload.name, config=config_data)
+    provider = PolicyProviderConfig(provider_id=payload.provider_id, name=payload.name, config=config_data)
     db.add(provider)
     db.commit()
     db.refresh(provider)
+    return provider
+
+
+def get_provider_by_provider_id(db: Session, provider_id: str):
+    provider = db.query(PolicyProviderConfig).filter(PolicyProviderConfig.provider_id == provider_id).first()
+    if not provider:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Policy provider not found")
     return provider
 
 
@@ -34,6 +41,8 @@ def get_provider(db: Session, provider_id: UUID):
 
 def update_provider(db: Session, provider_id: UUID, payload: PolicyProviderUpdate):
     provider = get_provider(db, provider_id)
+    if payload.provider_id is not None:
+        provider.provider_id = payload.provider_id
     if payload.name is not None:
         provider.name = payload.name
     config = provider.config.copy()

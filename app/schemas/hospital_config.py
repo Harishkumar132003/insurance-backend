@@ -42,7 +42,17 @@ class HospitalConfigResponse(BaseModel):
     id: UUID
     hospital_id: UUID
     config: dict[str, Any]
+    global_variables: dict[str, Any] | None = None
     created_at: datetime
     updated_at: datetime | None
 
     model_config = {"from_attributes": True}
+
+
+class GlobalVariableUpdate(BaseModel):
+    variables: dict[str, Any]
+
+
+class GlobalVariableResponse(BaseModel):
+    hospital_id: UUID
+    global_variables: dict[str, Any]

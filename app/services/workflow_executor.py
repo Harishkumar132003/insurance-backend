@@ -7,6 +7,7 @@ from sqlalchemy.orm import Session
 
 from app.models.hospital_config import HospitalConfig
 from app.models.hospital_prompt import HospitalPrompt
+from app.services.openai_service import summarize_with_openai
 from app.utils.template import render_template, extract_fields
 
 
@@ -158,7 +159,7 @@ async def execute_workflow_from_config(
 async def execute_workflow(
     db: Session, hospital_id: UUID, input_data: dict[str, Any]
 ) -> dict[str, Any]:
-    """Load hospital config and execute the full workflow."""
+    """Load hospital config, execute workflow, render prompt, and summarize via OpenAI."""
     config_row = (
         db.query(HospitalConfig)
         .filter(HospitalConfig.hospital_id == hospital_id)
@@ -171,7 +172,10 @@ async def execute_workflow(
         )
 
     print(f"[WORKFLOW] hospital_id={hospital_id}")
-    result = await execute_workflow_from_config(config_row.config, input_data)
+    global_vars = config_row.global_variables or {}
+    merged_input = {**global_vars, **input_data}
+    print(f"[WORKFLOW] global_variables={global_vars}")
+    result = await execute_workflow_from_config(config_row.config, merged_input)
 
     # Fetch hospital prompt and replace variables with workflow output
     prompt_row = (
@@ -179,13 +183,21 @@ async def execute_workflow(
         .filter(HospitalPrompt.hospital_id == hospital_id)
         .first()
     )
-    if prompt_row:
-        rendered_prompt = prompt_row.prompt_text
-        for key, value in result["data"].items():
-            rendered_prompt = rendered_prompt.replace(
-                "{" + key + "}", str(value) if value is not None else ""
-            )
-        print(f"[WORKFLOW] rendered_prompt={rendered_prompt}")
-        result["prompt"] = rendered_prompt
+    if not prompt_row:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="No prompt found for this hospital",
+        )
 
-    return result
+    rendered_prompt = prompt_row.prompt_text
+    for key, value in result["data"].items():
+        rendered_prompt = rendered_prompt.replace(
+            "{" + key + "}", str(value) if value is not None else ""
+        )
+    print(f"[WORKFLOW] rendered_prompt={rendered_prompt}")
+
+    # Send to OpenAI for summarization
+    summary = await summarize_with_openai(rendered_prompt)
+    print(f"[WORKFLOW] summary={summary}")
+
+    return {"summary": summary}

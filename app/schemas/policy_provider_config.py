@@ -8,6 +8,7 @@ from app.schemas.hospital_config import AuthConfig, StepConfig
 
 
 class PolicyProviderCreate(BaseModel):
+    provider_id: str
     name: str
     auth: AuthConfig | None = None
     steps: list[StepConfig]
@@ -15,6 +16,7 @@ class PolicyProviderCreate(BaseModel):
 
 
 class PolicyProviderUpdate(BaseModel):
+    provider_id: str | None = None
     name: str | None = None
     auth: AuthConfig | None = None
     steps: list[StepConfig] | None = None
@@ -23,6 +25,7 @@ class PolicyProviderUpdate(BaseModel):
 
 class PolicyProviderResponse(BaseModel):
     id: UUID
+    provider_id: str
     name: str
     config: dict[str, Any]
     created_at: datetime

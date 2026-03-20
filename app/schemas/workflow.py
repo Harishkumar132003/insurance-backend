@@ -17,6 +17,9 @@ class StepDebug(BaseModel):
 
 
 class WorkflowRunResponse(BaseModel):
+    summary: str
+
+
+class PolicyWorkflowRunResponse(BaseModel):
     data: dict[str, Any]
-    prompt: str | None = None
     steps_debug: list[StepDebug]

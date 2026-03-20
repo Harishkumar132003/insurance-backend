@@ -6,6 +6,7 @@ class Settings(BaseSettings):
     APP_ENV: str = "development"
     SECRET_KEY: str = "change-this-to-a-secure-random-string"
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 60
+    OPENAI_API_KEY: str = ""
 
     class Config:
         env_file = ".env"
