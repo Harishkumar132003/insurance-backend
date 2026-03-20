@@ -1,20 +1,20 @@
 version: "3.8"
 
 services:
-  postgres:
-    image: postgres:15
-    container_name: oasys-postgres
-    restart: always
-    environment:
-      POSTGRES_USER: admin
-      POSTGRES_PASSWORD: admin123
-      POSTGRES_DB: oasys
-    ports:
-      - "5432:5432"
-    volumes:
-      - postgres_data:/var/lib/postgresql/data
-    networks:
-      - shared-app-network
+  # postgres:
+  #   image: postgres:15
+  #   container_name: oasys-postgres
+  #   restart: always
+  #   environment:
+  #     POSTGRES_USER: admin
+  #     POSTGRES_PASSWORD: admin123
+  #     POSTGRES_DB: oasys
+  #   ports:
+  #     - "5432:5432"
+  #   volumes:
+  #     - postgres_data:/var/lib/postgresql/data
+  #   networks:
+  #     - shared-app-network
 
   backend:
     build: .
@@ -26,13 +26,11 @@ services:
       - .env
     environment:
       DATABASE_URL: postgresql+psycopg2://admin:admin123@oasys-postgres:5432/oasys
-    depends_on:
-      - postgres
     networks:
       - shared-app-network
 
-volumes:
-  postgres_data:
+# volumes:
+#   postgres_data:
 
 networks:
   shared-app-network:
