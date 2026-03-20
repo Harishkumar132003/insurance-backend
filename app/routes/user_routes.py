@@ -10,7 +10,7 @@ from app.controllers import user_controller
 router = APIRouter(prefix="/users", tags=["Users"])
 
 
-@router.get("/", response_model=list[UserResponse])
+@router.get("", response_model=list[UserResponse])
 def list_users(
     hospital_id: str | None = None,
     db: Session = Depends(get_db),
@@ -19,7 +19,7 @@ def list_users(
     return user_controller.get_all_users(db, hospital_id, current_user)
 
 
-@router.post("/", response_model=UserResponse, status_code=201)
+@router.post("", response_model=UserResponse, status_code=201)
 def create_user(
     payload: UserCreate,
     db: Session = Depends(get_db),

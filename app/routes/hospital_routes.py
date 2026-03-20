@@ -10,7 +10,7 @@ from app.controllers import hospital_controller
 router = APIRouter(prefix="/hospitals", tags=["Hospitals"])
 
 
-@router.get("/", response_model=list[HospitalResponse])
+@router.get("", response_model=list[HospitalResponse])
 def list_hospitals(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
@@ -18,7 +18,7 @@ def list_hospitals(
     return hospital_controller.get_all_hospitals(db)
 
 
-@router.post("/", response_model=HospitalResponse, status_code=201)
+@router.post("", response_model=HospitalResponse, status_code=201)
 def create_hospital(
     payload: HospitalCreate,
     db: Session = Depends(get_db),
