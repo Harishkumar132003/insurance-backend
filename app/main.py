@@ -9,7 +9,7 @@ from app.routes.workflow_routes import router as workflow_router
 from app.routes.hospital_prompt_routes import router as hospital_prompt_router
 from app.routes.policy_provider_routes import router as policy_provider_router
 
-app = FastAPI(title="OASYS Backend", version="0.1.0")
+app = FastAPI(title="OASYS Backend", version="0.1.0", redirect_slashes=False)
 
 app.add_middleware(
     CORSMiddleware,
