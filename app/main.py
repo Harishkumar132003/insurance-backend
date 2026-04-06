@@ -27,9 +27,23 @@ from app.routes.email_routes import router as email_router
 from app.routes.email_template_routes import router as email_template_router
 from app.routes.claim_case_routes import router as claim_case_router
 
+def _run_migrations():
+    """Add missing columns to existing tables."""
+    from sqlalchemy import text
+    alter_statements = [
+        "ALTER TABLE policy_provider_configs ADD COLUMN IF NOT EXISTS email VARCHAR",
+        "ALTER TABLE claim_case_emails ADD COLUMN IF NOT EXISTS email_type VARCHAR",
+    ]
+    with engine.connect() as conn:
+        for stmt in alter_statements:
+            conn.execute(text(stmt))
+        conn.commit()
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     Base.metadata.create_all(bind=engine)
+    _run_migrations()
     start_email_scheduler()
     yield
     stop_email_scheduler()
