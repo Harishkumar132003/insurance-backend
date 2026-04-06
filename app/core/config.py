@@ -7,6 +7,9 @@ class Settings(BaseSettings):
     SECRET_KEY: str = "change-this-to-a-secure-random-string"
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 60
     OPENAI_API_KEY: str = ""
+    EMAIL_ADDRESS: str = ""
+    EMAIL_APP_PASSWORD: str = ""
+    UPLOAD_DIR: str = "uploads"
 
     class Config:
         env_file = ".env"

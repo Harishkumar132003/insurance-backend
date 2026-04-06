@@ -25,3 +25,8 @@ alembic/versions/__pycache__/
 # OS
 .DS_Store
 Thumbs.db
+
+# Uploads
+uploads/
+
+alembic

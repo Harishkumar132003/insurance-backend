@@ -10,6 +10,7 @@ from app.schemas.hospital_config import AuthConfig, StepConfig
 class PolicyProviderCreate(BaseModel):
     provider_id: str
     name: str
+    email: str | None = None
     auth: AuthConfig | None = None
     steps: list[StepConfig]
     required_fields: list[str] = []
@@ -27,6 +28,7 @@ class PolicyProviderResponse(BaseModel):
     id: UUID
     provider_id: str
     name: str
+    email: str | None = None
     config: dict[str, Any]
     created_at: datetime
     updated_at: datetime | None
