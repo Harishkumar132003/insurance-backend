@@ -26,6 +26,8 @@ services:
       - .env
     environment:
       DATABASE_URL: postgresql+psycopg2://admin:admin123@oasys-postgres:5432/oasys
+    volumes:
+      - ./uploads:/app/uploads
     networks:
       - shared-app-network
 
