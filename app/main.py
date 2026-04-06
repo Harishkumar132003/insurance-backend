@@ -4,6 +4,9 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from app.db.base import Base
+from app.db.session import engine
+import app.models  # noqa: F401 — ensure all models are registered
 from app.services.email_scheduler import start_email_scheduler, stop_email_scheduler
 
 logging.basicConfig(
@@ -26,6 +29,7 @@ from app.routes.claim_case_routes import router as claim_case_router
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    Base.metadata.create_all(bind=engine)
     start_email_scheduler()
     yield
     stop_email_scheduler()
