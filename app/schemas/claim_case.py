@@ -4,6 +4,8 @@ from uuid import UUID
 
 from pydantic import BaseModel
 
+from app.schemas.claim_case_document import ClaimCaseDocumentResponse
+
 
 class ClaimCaseCreate(BaseModel):
     uhid: str
@@ -77,6 +79,7 @@ class ClaimCaseDetailResponse(BaseModel):
     status_history: list[StatusHistoryItem] = []
     query_logs: list[QueryLogItem] = []
     emails: list["ClaimCaseEmailListItem"] = []
+    documents: list[ClaimCaseDocumentResponse] = []
 
     model_config = {"from_attributes": True}
 

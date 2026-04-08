@@ -6,12 +6,13 @@ from sqlalchemy.orm import Session
 
 from app.core.config import settings
 from app.models.claim_case import ClaimCase
+from app.models.claim_case_document import ClaimCaseDocument
 from app.models.claim_case_email import ClaimCaseEmail
 from app.models.claim_case_email_attachment import ClaimCaseEmailAttachment
 from app.models.policy_provider_config import PolicyProviderConfig
 from app.models.status_history import StatusHistory
 from app.services.email_service import send_email, fetch_inbox
-from app.utils.file_storage import save_attachment
+from app.utils.file_storage import save_attachment, read_file
 
 
 def send_form_email(
@@ -50,16 +51,31 @@ def send_form_email(
         claim_case.thread_id = uuid.uuid4().hex[:12]
     subject = f"{subject} [{claim_case.thread_id}]"
 
-    # 4. Send email with PDF attachment
+    # 4. Build attachments list: form PDF + uploaded documents
+    attachments: list[tuple[bytes, str, str]] = []
+    if pdf_data:
+        attachments.append((pdf_data, pdf_filename, "application/pdf"))
+
+    documents = db.query(ClaimCaseDocument).filter(
+        ClaimCaseDocument.claim_case_id == claim_case_id
+    ).all()
+    for doc in documents:
+        file_bytes = read_file(doc.file_path)
+        attachments.append((
+            file_bytes,
+            doc.original_filename,
+            doc.content_type or "application/octet-stream",
+        ))
+
+    # 5. Send email with all attachments
     send_email(
         to_email=provider.email,
         subject=subject,
         body=content,
-        pdf_data=pdf_data,
-        pdf_filename=pdf_filename,
+        attachments=attachments or None,
     )
 
-    # 5. Update claim_case status to APPLIED
+    # 6. Update claim_case status to APPLIED
     claim_case.status = "APPLIED"
     db.add(StatusHistory(
         claim_case_id=claim_case.id,
@@ -68,7 +84,7 @@ def send_form_email(
         remarks=f"Email sent to {provider.email}",
     ))
 
-    # 6. Persist the sent email record
+    # 7. Persist the sent email record
     email_record = ClaimCaseEmail(
         claim_case_id=claim_case.id,
         direction="SENT",
@@ -83,19 +99,19 @@ def send_form_email(
     db.add(email_record)
     db.flush()
 
-    # 7. Save attachment if present
-    if pdf_data:
+    # 8. Save attachment records for audit trail
+    for file_bytes, filename, content_type in attachments:
         stored_filename, file_path = save_attachment(
-            claim_case.id, pdf_data, pdf_filename
+            claim_case.id, file_bytes, filename
         )
         db.add(ClaimCaseEmailAttachment(
             email_id=email_record.id,
             claim_case_id=claim_case.id,
-            original_filename=pdf_filename,
+            original_filename=filename,
             stored_filename=stored_filename,
             file_path=file_path,
-            content_type="application/pdf",
-            file_size=len(pdf_data),
+            content_type=content_type,
+            file_size=len(file_bytes),
         ))
 
     db.commit()
@@ -146,12 +162,27 @@ def send_query_email(
 
     subject = f"{subject} [{claim_case.thread_id}]"
 
+    # Build attachments list: optional PDF + uploaded documents
+    attachments: list[tuple[bytes, str, str]] = []
+    if pdf_data:
+        attachments.append((pdf_data, pdf_filename, "application/pdf"))
+
+    documents = db.query(ClaimCaseDocument).filter(
+        ClaimCaseDocument.claim_case_id == claim_case_id
+    ).all()
+    for doc in documents:
+        file_bytes = read_file(doc.file_path)
+        attachments.append((
+            file_bytes,
+            doc.original_filename,
+            doc.content_type or "application/octet-stream",
+        ))
+
     send_email(
         to_email=provider.email,
         subject=subject,
         body=content,
-        pdf_data=pdf_data,
-        pdf_filename=pdf_filename,
+        attachments=attachments or None,
     )
 
     db.add(StatusHistory(
@@ -175,18 +206,18 @@ def send_query_email(
     db.add(email_record)
     db.flush()
 
-    if pdf_data:
+    for file_bytes, filename, content_type in attachments:
         stored_filename, file_path = save_attachment(
-            claim_case.id, pdf_data, pdf_filename
+            claim_case.id, file_bytes, filename
         )
         db.add(ClaimCaseEmailAttachment(
             email_id=email_record.id,
             claim_case_id=claim_case.id,
-            original_filename=pdf_filename,
+            original_filename=filename,
             stored_filename=stored_filename,
             file_path=file_path,
-            content_type="application/pdf",
-            file_size=len(pdf_data),
+            content_type=content_type,
+            file_size=len(file_bytes),
         ))
 
     db.commit()

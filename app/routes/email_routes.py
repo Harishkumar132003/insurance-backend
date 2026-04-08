@@ -15,18 +15,18 @@ async def send_form_email(
     claim_case_id: int = Form(...),
     subject: str = Form(...),
     content: str = Form(...),
-    file: UploadFile = File(...),
+    file: UploadFile = File(None),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    pdf_data = await file.read()
+    pdf_data = await file.read() if file else None
     return email_controller.send_form_email(
         db=db,
         claim_case_id=claim_case_id,
         subject=subject,
         content=content,
         pdf_data=pdf_data,
-        pdf_filename=file.filename or "form.pdf",
+        pdf_filename=file.filename or "form.pdf" if file else "form.pdf",
     )
 
 

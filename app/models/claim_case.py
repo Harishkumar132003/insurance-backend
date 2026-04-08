@@ -26,6 +26,7 @@ class ClaimCase(Base):
     form_data = relationship("FormData", back_populates="claim_case")
     query_logs = relationship("QueryLog", back_populates="claim_case")
     emails = relationship("ClaimCaseEmail", back_populates="claim_case", order_by="ClaimCaseEmail.created_at")
+    documents = relationship("ClaimCaseDocument", back_populates="claim_case", cascade="all, delete-orphan")
 
     __table_args__ = (
         Index("ix_claim_cases_uhid", "uhid"),

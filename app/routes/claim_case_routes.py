@@ -1,14 +1,16 @@
+from typing import List
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, File, Query, UploadFile
 from sqlalchemy.orm import Session
 
 from app.db.session import get_db
 from app.core.deps import get_current_user
 from app.models.user import User
 from app.schemas.claim_case import ClaimCaseResponse, ClaimCaseDetailResponse, ClaimCaseStatusUpdate, ClaimListItem
+from app.schemas.claim_case_document import ClaimCaseDocumentResponse
 from app.schemas.claim_case_email import ClaimCaseEmailResponse, ClaimCaseEmailListResponse
-from app.controllers import claim_case_controller, claim_case_email_controller
+from app.controllers import claim_case_controller, claim_case_email_controller, claim_case_document_controller
 
 router = APIRouter(prefix="/claim-cases", tags=["Claim Cases"])
 
@@ -85,3 +87,66 @@ def download_email_attachment(
     current_user: User = Depends(get_current_user),
 ):
     return claim_case_email_controller.download_attachment(db, claim_case_id, email_id, attachment_id)
+
+
+@router.get("/{claim_case_id}/emails/{email_id}/attachments/{attachment_id}/view")
+def view_email_attachment(
+    claim_case_id: int,
+    email_id: int,
+    attachment_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    return claim_case_email_controller.view_attachment(db, claim_case_id, email_id, attachment_id)
+
+
+# ── Document upload endpoints ──
+
+
+@router.post("/{claim_case_id}/documents", response_model=list[ClaimCaseDocumentResponse], status_code=201)
+async def upload_documents(
+    claim_case_id: int,
+    files: List[UploadFile] = File(...),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    return claim_case_document_controller.upload_documents(db, claim_case_id, files)
+
+
+@router.get("/{claim_case_id}/documents", response_model=list[ClaimCaseDocumentResponse])
+def list_documents(
+    claim_case_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    return claim_case_document_controller.list_documents(db, claim_case_id)
+
+
+@router.delete("/{claim_case_id}/documents/{document_id}", status_code=204)
+def delete_document(
+    claim_case_id: int,
+    document_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    claim_case_document_controller.delete_document(db, claim_case_id, document_id)
+
+
+@router.get("/{claim_case_id}/documents/{document_id}/download")
+def download_document(
+    claim_case_id: int,
+    document_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    return claim_case_document_controller.download_document(db, claim_case_id, document_id)
+
+
+@router.get("/{claim_case_id}/documents/{document_id}/view")
+def view_document(
+    claim_case_id: int,
+    document_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    return claim_case_document_controller.view_document(db, claim_case_id, document_id)

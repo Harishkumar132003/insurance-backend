@@ -1,12 +1,14 @@
-from fastapi import HTTPException, status
+from fastapi import HTTPException, UploadFile, status
 from sqlalchemy.orm import Session
 from sqlalchemy.orm.attributes import flag_modified
 
 from app.models.claim_case import ClaimCase
+from app.models.claim_case_document import ClaimCaseDocument
 from app.models.form_data import FormData
 from app.models.status_history import StatusHistory
 from app.schemas.form_data import FormDataCreate, FormDataUpdate
 from app.schemas.claim_case import ClaimCaseSubmitForm
+from app.utils.file_storage import save_document
 
 
 def create_form_data(db: Session, payload: FormDataCreate) -> FormData:
@@ -71,7 +73,12 @@ def submit_form_data(db: Session, form_data_id: int) -> FormData:
     return form_data
 
 
-def create_claim_and_form_data(db: Session, payload: ClaimCaseSubmitForm, hospital_id=None) -> dict:
+def create_claim_and_form_data(
+    db: Session,
+    payload: ClaimCaseSubmitForm,
+    hospital_id=None,
+    files: list[UploadFile] | None = None,
+) -> dict:
     # 1. Create ClaimCase with DRAFT status
     claim_case = ClaimCase(
         uhid=payload.uhid,
@@ -97,6 +104,20 @@ def create_claim_and_form_data(db: Session, payload: ClaimCaseSubmitForm, hospit
         status="DRAFT",
         remarks="Form submitted, claim case created",
     ))
+
+    # 4. Save uploaded documents
+    for file in (files or []):
+        file_bytes = file.file.read()
+        original_filename = file.filename or "unnamed_file"
+        stored_filename, file_path = save_document(claim_case.id, file_bytes, original_filename)
+        db.add(ClaimCaseDocument(
+            claim_case_id=claim_case.id,
+            original_filename=original_filename,
+            stored_filename=stored_filename,
+            file_path=file_path,
+            content_type=file.content_type,
+            file_size=len(file_bytes),
+        ))
 
     db.commit()
     db.refresh(claim_case)

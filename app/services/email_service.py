@@ -15,9 +15,13 @@ def send_email(
     to_email: str,
     subject: str,
     body: str,
-    pdf_data: bytes | None = None,
-    pdf_filename: str = "form.pdf",
+    attachments: list[tuple[bytes, str, str]] | None = None,
 ) -> None:
+    """Send an email with optional attachments.
+
+    Args:
+        attachments: List of (file_bytes, filename, content_type) tuples.
+    """
     if not settings.EMAIL_ADDRESS or not settings.EMAIL_APP_PASSWORD:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -30,10 +34,14 @@ def send_email(
     msg["Subject"] = subject
     msg.attach(MIMEText(body, "html"))
 
-    if pdf_data:
-        pdf_part = MIMEApplication(pdf_data, _subtype="pdf")
-        pdf_part.add_header("Content-Disposition", "attachment", filename=pdf_filename)
-        msg.attach(pdf_part)
+    if attachments:
+        for file_bytes, filename, content_type in attachments:
+            maintype, _, subtype = content_type.partition("/")
+            if not subtype:
+                subtype = "octet-stream"
+            part = MIMEApplication(file_bytes, _subtype=subtype)
+            part.add_header("Content-Disposition", "attachment", filename=filename)
+            msg.attach(part)
 
     try:
         with smtplib.SMTP_SSL("smtp.gmail.com", 465) as server:

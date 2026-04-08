@@ -91,3 +91,28 @@ def download_attachment(
         filename=attachment.original_filename,
         media_type=attachment.content_type or "application/octet-stream",
     )
+
+
+def view_attachment(
+    db: Session, claim_case_id: int, email_id: int, attachment_id: int
+):
+    attachment = (
+        db.query(ClaimCaseEmailAttachment)
+        .filter(
+            ClaimCaseEmailAttachment.id == attachment_id,
+            ClaimCaseEmailAttachment.email_id == email_id,
+            ClaimCaseEmailAttachment.claim_case_id == claim_case_id,
+        )
+        .first()
+    )
+    if not attachment:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Attachment not found"
+        )
+
+    full_path = get_attachment_full_path(attachment.file_path)
+    return FileResponse(
+        path=full_path,
+        media_type=attachment.content_type or "application/octet-stream",
+        headers={"Content-Disposition": f'inline; filename="{attachment.original_filename}"'},
+    )

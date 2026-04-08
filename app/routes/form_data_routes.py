@@ -1,4 +1,7 @@
-from fastapi import APIRouter, Depends
+import json
+from typing import List
+
+from fastapi import APIRouter, Depends, File, Form, UploadFile
 from sqlalchemy.orm import Session
 
 from app.db.session import get_db
@@ -12,12 +15,22 @@ router = APIRouter(prefix="/form-data", tags=["Form Data"])
 
 
 @router.post("/submit-form", response_model=ClaimCaseSubmitFormResponse, status_code=201)
-def submit_form(
-    payload: ClaimCaseSubmitForm,
+async def submit_form(
+    uhid: str = Form(...),
+    policy_provider_id: str = Form(...),
+    data_json: str = Form(...),
+    files: List[UploadFile] = File(None),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    return form_data_controller.create_claim_and_form_data(db, payload, hospital_id=current_user.hospital_id)
+    payload = ClaimCaseSubmitForm(
+        uhid=uhid,
+        policy_provider_id=policy_provider_id,
+        data_json=json.loads(data_json),
+    )
+    return form_data_controller.create_claim_and_form_data(
+        db, payload, hospital_id=current_user.hospital_id, files=files or [],
+    )
 
 
 @router.post("", response_model=FormDataResponse, status_code=201)
