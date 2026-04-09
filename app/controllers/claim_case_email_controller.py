@@ -1,10 +1,59 @@
+import math
+
 from fastapi import HTTPException, status
 from fastapi.responses import FileResponse
+from sqlalchemy import func
 from sqlalchemy.orm import Session, joinedload
 
+from app.models.claim_case import ClaimCase
 from app.models.claim_case_email import ClaimCaseEmail
 from app.models.claim_case_email_attachment import ClaimCaseEmailAttachment
 from app.utils.file_storage import get_attachment_full_path
+
+
+def get_all_claim_case_emails(db: Session, hospital_id, page: int = 1, page_size: int = 20) -> dict:
+    base_query = (
+        db.query(ClaimCaseEmail, ClaimCase.claim_number)
+        .join(ClaimCase, ClaimCaseEmail.claim_case_id == ClaimCase.id)
+        .filter(ClaimCase.hospital_id == hospital_id)
+    )
+
+    total = base_query.count()
+    total_pages = math.ceil(total / page_size) if total > 0 else 1
+    offset = (page - 1) * page_size
+
+    rows = (
+        base_query
+        .options(joinedload(ClaimCaseEmail.attachments))
+        .order_by(ClaimCaseEmail.created_at.desc())
+        .offset(offset)
+        .limit(page_size)
+        .all()
+    )
+
+    items = []
+    for email, claim_number in rows:
+        items.append({
+            "id": email.id,
+            "claim_case_id": email.claim_case_id,
+            "claim_number": claim_number,
+            "direction": email.direction,
+            "email_type": email.email_type,
+            "from_email": email.from_email,
+            "to_email": email.to_email,
+            "subject": email.subject,
+            "email_date": email.email_date,
+            "created_at": email.created_at,
+            "attachment_count": len(email.attachments),
+        })
+
+    return {
+        "items": items,
+        "total": total,
+        "page": page,
+        "page_size": page_size,
+        "total_pages": total_pages,
+    }
 
 
 def get_emails_for_claim_case(

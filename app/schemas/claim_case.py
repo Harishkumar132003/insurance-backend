@@ -23,6 +23,7 @@ class ClaimCaseResponse(BaseModel):
     current_stage: str
     status: str
     claim_status: str | None = None
+    approved_amount: float | None = None
     created_at: datetime
     updated_at: datetime | None = None
 
@@ -73,6 +74,7 @@ class ClaimCaseDetailResponse(BaseModel):
     current_stage: str
     status: str
     claim_status: str | None = None
+    approved_amount: float | None = None
     created_at: datetime
     updated_at: datetime | None = None
     form_data: list[FormDataItem] = []
@@ -101,6 +103,13 @@ class ClaimCaseStatusUpdate(BaseModel):
     remarks: str | None = None
 
 
+class ClaimCaseExtractedDataUpdate(BaseModel):
+    claim_status: str | None = None
+    claim_number: str | None = None
+    approved_amount: float | None = None
+    email_type: str | None = None
+
+
 class ClaimCaseSubmitForm(BaseModel):
     uhid: str
     policy_provider_id: UUID
@@ -121,6 +130,7 @@ class ClaimListItem(BaseModel):
     provider_name: str | None = None
     provider_id: str | None = None
     amount: float | None = None
+    approved_amount: float | None = None
     status: str | None = None
     created_at: datetime
 

@@ -38,6 +38,7 @@ Return STRICT JSON:
   "claim_number": "string or null",
   "uhid": "string or null",
   "status": "APPROVED | REJECTED | QUERY | ADR | UNKNOWN",
+  "approved_amount": "number or null — extract the approved/sanctioned amount if status is APPROVED",
   "summary": "1-2 line summary",
   "query_details": "if QUERY/ADR, describe what is being asked or what documents are needed. null otherwise",
   "documents_requested": "if ADR, list the specific documents requested as comma-separated string. null otherwise"
@@ -89,6 +90,10 @@ EXTRACTION RULES:
 
 - uhid → look for:
   "ID/TPA/Insured Id of the Patient", "Member ID", "Insured ID", "Patient ID", "UHID", "TPA ID"
+
+- approved_amount → look for:
+  "Approved Amount", "Sanctioned Amount", "Authorized Amount", "Cashless Approved Amount"
+  Extract as a plain number (no commas or currency symbols). Return null if status is not APPROVED or amount not found.
 
 READ THE FULL EMAIL BODY AND ALL ATTACHED DOCUMENT CONTENT CAREFULLY before extracting.
 
@@ -171,6 +176,7 @@ def _process_single_email(db: Session, email_data: dict):
     extracted_status = result.get("status", "UNKNOWN")
     uhid = result.get("uhid")
     claim_number = result.get("claim_number")
+    approved_amount = result.get("approved_amount")
     summary = result.get("summary", "")
     query_details = result.get("query_details")
     documents_requested = result.get("documents_requested")
@@ -191,6 +197,11 @@ def _process_single_email(db: Session, email_data: dict):
     claim_case.claim_status = extracted_status
     if claim_number and not claim_case.claim_number:
         claim_case.claim_number = claim_number
+    if extracted_status == "APPROVED" and approved_amount is not None:
+        try:
+            claim_case.approved_amount = float(approved_amount)
+        except (ValueError, TypeError):
+            logger.warning(f"Could not parse approved_amount: {approved_amount}")
 
     # 5. If QUERY/ADR → create QueryLog
     if extracted_status in ("QUERY", "ADR"):

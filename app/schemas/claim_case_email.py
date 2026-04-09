@@ -41,3 +41,25 @@ class ClaimCaseEmailListResponse(BaseModel):
     attachment_count: int = 0
 
     model_config = {"from_attributes": True}
+
+
+class AllClaimCaseEmailListItem(BaseModel):
+    id: int
+    claim_case_id: int
+    claim_number: str | None = None
+    direction: str
+    email_type: str | None = None
+    from_email: str
+    to_email: str
+    subject: str | None = None
+    email_date: datetime | None = None
+    created_at: datetime
+    attachment_count: int = 0
+
+
+class PaginatedEmailListResponse(BaseModel):
+    items: list[AllClaimCaseEmailListItem]
+    total: int
+    page: int
+    page_size: int
+    total_pages: int

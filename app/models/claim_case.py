@@ -1,4 +1,4 @@
-from sqlalchemy import Column, BigInteger, String, DateTime, ForeignKey, Index, func
+from sqlalchemy import Column, BigInteger, Numeric, String, DateTime, ForeignKey, Index, func
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import relationship
 
@@ -16,6 +16,7 @@ class ClaimCase(Base):
     current_stage = Column(String, nullable=False, default="PRE_AUTH")
     status = Column(String, nullable=False, default="DRAFT")
     claim_status = Column(String, nullable=True)
+    approved_amount = Column(Numeric(12, 2), nullable=True)
     thread_id = Column(String, unique=True, nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())

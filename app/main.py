@@ -33,6 +33,7 @@ def _run_migrations():
     alter_statements = [
         "ALTER TABLE policy_provider_configs ADD COLUMN IF NOT EXISTS email VARCHAR",
         "ALTER TABLE claim_case_emails ADD COLUMN IF NOT EXISTS email_type VARCHAR",
+        "ALTER TABLE claim_cases ADD COLUMN IF NOT EXISTS approved_amount NUMERIC(12,2)",
     ]
     with engine.connect() as conn:
         for stmt in alter_statements:
