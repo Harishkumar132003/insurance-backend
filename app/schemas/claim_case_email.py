@@ -1,4 +1,5 @@
 from datetime import datetime
+from uuid import UUID
 
 from pydantic import BaseModel
 
@@ -15,7 +16,7 @@ class ClaimCaseEmailAttachmentResponse(BaseModel):
 
 class ClaimCaseEmailResponse(BaseModel):
     id: int
-    claim_case_id: int
+    claim_case_id: UUID
     direction: str
     email_type: str | None = None
     from_email: str
@@ -45,7 +46,7 @@ class ClaimCaseEmailListResponse(BaseModel):
 
 class AllClaimCaseEmailListItem(BaseModel):
     id: int
-    claim_case_id: int
+    claim_case_id: UUID
     claim_number: str | None = None
     direction: str
     email_type: str | None = None

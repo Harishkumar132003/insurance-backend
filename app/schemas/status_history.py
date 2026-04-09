@@ -1,10 +1,11 @@
 from datetime import datetime
+from uuid import UUID
 
 from pydantic import BaseModel
 
 
 class StatusHistoryCreate(BaseModel):
-    claim_case_id: int
+    claim_case_id: UUID
     stage: str
     status: str
     remarks: str | None = None
@@ -13,7 +14,7 @@ class StatusHistoryCreate(BaseModel):
 
 class StatusHistoryResponse(BaseModel):
     id: int
-    claim_case_id: int
+    claim_case_id: UUID
     stage: str
     status: str
     remarks: str | None = None

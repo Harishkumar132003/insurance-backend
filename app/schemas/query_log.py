@@ -1,11 +1,12 @@
 from datetime import datetime
+from uuid import UUID
 
 from pydantic import BaseModel
 
 
 class QueryLogResponse(BaseModel):
     id: int
-    claim_case_id: int
+    claim_case_id: UUID
     query_type: str
     query_details: str | None = None
     documents_requested: str | None = None

@@ -9,7 +9,7 @@ class StatusHistory(Base):
     __tablename__ = "status_history"
 
     id = Column(BigInteger, primary_key=True, autoincrement=True)
-    claim_case_id = Column(BigInteger, ForeignKey("claim_cases.id"), nullable=False)
+    claim_case_id = Column(UUID(as_uuid=True), ForeignKey("claim_cases.id"), nullable=False)
     stage = Column(String, nullable=False)
     status = Column(String, nullable=False)
     remarks = Column(Text, nullable=True)

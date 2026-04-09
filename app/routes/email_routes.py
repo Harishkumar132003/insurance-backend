@@ -1,3 +1,5 @@
+from uuid import UUID
+
 from fastapi import APIRouter, Depends, Form, Query, UploadFile, File
 from sqlalchemy.orm import Session
 
@@ -12,7 +14,7 @@ router = APIRouter(prefix="/email", tags=["Email"])
 
 @router.post("/send", response_model=SendEmailResponse)
 async def send_form_email(
-    claim_case_id: int = Form(...),
+    claim_case_id: UUID = Form(...),
     subject: str = Form(...),
     content: str = Form(...),
     file: UploadFile = File(None),
@@ -32,7 +34,7 @@ async def send_form_email(
 
 @router.post("/query", response_model=SendEmailResponse)
 async def send_query_email(
-    claim_case_id: int = Form(...),
+    claim_case_id: UUID = Form(...),
     subject: str = Form(...),
     content: str = Form(...),
     file: UploadFile = File(None),

@@ -6,7 +6,7 @@ from app.core.config import settings
 UPLOAD_BASE_DIR = getattr(settings, "UPLOAD_DIR", "uploads")
 
 
-def save_attachment(claim_case_id: int, file_bytes: bytes, original_filename: str) -> tuple[str, str]:
+def save_attachment(claim_case_id, file_bytes: bytes, original_filename: str) -> tuple[str, str]:
     """Save file to disk. Returns (stored_filename, relative_file_path)."""
     dir_path = os.path.join(UPLOAD_BASE_DIR, "claim_cases", str(claim_case_id), "attachments")
     os.makedirs(dir_path, exist_ok=True)
@@ -21,7 +21,7 @@ def save_attachment(claim_case_id: int, file_bytes: bytes, original_filename: st
     return stored_filename, file_path
 
 
-def save_document(claim_case_id: int, file_bytes: bytes, original_filename: str) -> tuple[str, str]:
+def save_document(claim_case_id, file_bytes: bytes, original_filename: str) -> tuple[str, str]:
     """Save a document file to disk. Returns (stored_filename, relative_file_path)."""
     dir_path = os.path.join(UPLOAD_BASE_DIR, "claim_cases", str(claim_case_id), "documents")
     os.makedirs(dir_path, exist_ok=True)

@@ -1,4 +1,6 @@
-from sqlalchemy import Column, BigInteger, Numeric, String, DateTime, ForeignKey, Index, func
+import uuid
+
+from sqlalchemy import Column, Numeric, String, DateTime, ForeignKey, Index, func
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import relationship
 
@@ -8,7 +10,7 @@ from app.db.base import Base
 class ClaimCase(Base):
     __tablename__ = "claim_cases"
 
-    id = Column(BigInteger, primary_key=True, autoincrement=True)
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     uhid = Column(String, nullable=False)
     hospital_id = Column(UUID(as_uuid=True), ForeignKey("hospitals.id"), nullable=True)
     policy_provider_id = Column(UUID(as_uuid=True), ForeignKey("policy_provider_configs.id"), nullable=False)

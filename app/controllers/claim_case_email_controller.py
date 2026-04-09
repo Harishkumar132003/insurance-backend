@@ -57,7 +57,7 @@ def get_all_claim_case_emails(db: Session, hospital_id, page: int = 1, page_size
 
 
 def get_emails_for_claim_case(
-    db: Session, claim_case_id: int, direction: str | None = None, email_type: str | None = None
+    db: Session, claim_case_id, direction: str | None = None, email_type: str | None = None
 ) -> list[dict]:
     query = db.query(ClaimCaseEmail).filter(
         ClaimCaseEmail.claim_case_id == claim_case_id
@@ -89,7 +89,7 @@ def get_emails_for_claim_case(
     return result
 
 
-def get_all_emails_with_attachments(db: Session, claim_case_id: int):
+def get_all_emails_with_attachments(db: Session, claim_case_id):
     emails = (
         db.query(ClaimCaseEmail)
         .options(joinedload(ClaimCaseEmail.attachments))
@@ -100,7 +100,7 @@ def get_all_emails_with_attachments(db: Session, claim_case_id: int):
     return emails
 
 
-def get_email_detail(db: Session, claim_case_id: int, email_id: int):
+def get_email_detail(db: Session, claim_case_id, email_id: int):
     email = (
         db.query(ClaimCaseEmail)
         .options(joinedload(ClaimCaseEmail.attachments))
@@ -118,7 +118,7 @@ def get_email_detail(db: Session, claim_case_id: int, email_id: int):
 
 
 def download_attachment(
-    db: Session, claim_case_id: int, email_id: int, attachment_id: int
+    db: Session, claim_case_id, email_id: int, attachment_id: int
 ):
     attachment = (
         db.query(ClaimCaseEmailAttachment)
@@ -143,7 +143,7 @@ def download_attachment(
 
 
 def view_attachment(
-    db: Session, claim_case_id: int, email_id: int, attachment_id: int
+    db: Session, claim_case_id, email_id: int, attachment_id: int
 ):
     attachment = (
         db.query(ClaimCaseEmailAttachment)

@@ -81,7 +81,7 @@ def get_all_claims(
     return result
 
 
-def get_claim_case(db: Session, claim_case_id: int) -> ClaimCase:
+def get_claim_case(db: Session, claim_case_id) -> ClaimCase:
     claim_case = db.query(ClaimCase).filter(ClaimCase.id == claim_case_id).first()
     if not claim_case:
         raise HTTPException(
@@ -95,7 +95,7 @@ VALID_STATUSES = {"DRAFT", "APPLIED", "QUERY", "APPROVED", "REJECTED", "ADR", "U
 
 
 def update_claim_case_status(
-    db: Session, claim_case_id: int, new_status: str, remarks: str | None = None, user_id=None
+    db: Session, claim_case_id, new_status: str, remarks: str | None = None, user_id=None
 ) -> ClaimCase:
     claim_case = db.query(ClaimCase).filter(ClaimCase.id == claim_case_id).first()
     if not claim_case:
@@ -134,7 +134,7 @@ STATUS_TO_EMAIL_TYPE = {
 
 def update_extracted_data(
     db: Session,
-    claim_case_id: int,
+    claim_case_id,
     email_id: int,
     payload,
     user_id=None,
@@ -193,8 +193,8 @@ def update_extracted_data(
     if payload.claim_number is not None:
         claim_case.claim_number = payload.claim_number
 
-    # Update approved_amount
-    if payload.approved_amount is not None:
+    # Update approved_amount (allow setting to null)
+    if "approved_amount" in payload.model_fields_set:
         claim_case.approved_amount = payload.approved_amount
 
     # Add status history for audit

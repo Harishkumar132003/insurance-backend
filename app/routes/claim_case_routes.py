@@ -41,7 +41,7 @@ def get_all_claim_case_emails(
 
 @router.get("/{claim_case_id}", response_model=ClaimCaseDetailResponse)
 def get_claim_case(
-    claim_case_id: int,
+    claim_case_id: UUID,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
@@ -50,7 +50,7 @@ def get_claim_case(
 
 @router.patch("/{claim_case_id}/status", response_model=ClaimCaseResponse)
 def update_claim_case_status(
-    claim_case_id: int,
+    claim_case_id: UUID,
     payload: ClaimCaseStatusUpdate,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
@@ -62,7 +62,7 @@ def update_claim_case_status(
 
 @router.patch("/{claim_case_id}/emails/{email_id}/extracted-data", response_model=ClaimCaseResponse)
 def update_extracted_data(
-    claim_case_id: int,
+    claim_case_id: UUID,
     email_id: int,
     payload: ClaimCaseExtractedDataUpdate,
     db: Session = Depends(get_db),
@@ -75,7 +75,7 @@ def update_extracted_data(
 
 @router.get("/{claim_case_id}/emails", response_model=list[ClaimCaseEmailListResponse])
 def get_claim_case_emails(
-    claim_case_id: int,
+    claim_case_id: UUID,
     direction: str | None = Query(default=None, description="Filter by SENT or RECEIVED"),
     email_type: str | None = Query(default=None, description="Filter by email type: QUERY_RAISED, QUERY_RESPONSE, APPROVAL, REJECTION, ADR"),
     db: Session = Depends(get_db),
@@ -86,7 +86,7 @@ def get_claim_case_emails(
 
 @router.get("/{claim_case_id}/emails/all", response_model=list[ClaimCaseEmailResponse])
 def get_all_emails_with_attachments(
-    claim_case_id: int,
+    claim_case_id: UUID,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
@@ -95,7 +95,7 @@ def get_all_emails_with_attachments(
 
 @router.get("/{claim_case_id}/emails/{email_id}", response_model=ClaimCaseEmailResponse)
 def get_claim_case_email_detail(
-    claim_case_id: int,
+    claim_case_id: UUID,
     email_id: int,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
@@ -105,7 +105,7 @@ def get_claim_case_email_detail(
 
 @router.get("/{claim_case_id}/emails/{email_id}/attachments/{attachment_id}/download")
 def download_email_attachment(
-    claim_case_id: int,
+    claim_case_id: UUID,
     email_id: int,
     attachment_id: int,
     db: Session = Depends(get_db),
@@ -116,7 +116,7 @@ def download_email_attachment(
 
 @router.get("/{claim_case_id}/emails/{email_id}/attachments/{attachment_id}/view")
 def view_email_attachment(
-    claim_case_id: int,
+    claim_case_id: UUID,
     email_id: int,
     attachment_id: int,
     db: Session = Depends(get_db),
@@ -130,7 +130,7 @@ def view_email_attachment(
 
 @router.post("/{claim_case_id}/documents", response_model=list[ClaimCaseDocumentResponse], status_code=201)
 async def upload_documents(
-    claim_case_id: int,
+    claim_case_id: UUID,
     files: List[UploadFile] = File(...),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
@@ -140,7 +140,7 @@ async def upload_documents(
 
 @router.get("/{claim_case_id}/documents", response_model=list[ClaimCaseDocumentResponse])
 def list_documents(
-    claim_case_id: int,
+    claim_case_id: UUID,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
@@ -149,7 +149,7 @@ def list_documents(
 
 @router.delete("/{claim_case_id}/documents/{document_id}", status_code=204)
 def delete_document(
-    claim_case_id: int,
+    claim_case_id: UUID,
     document_id: int,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
@@ -159,7 +159,7 @@ def delete_document(
 
 @router.get("/{claim_case_id}/documents/{document_id}/download")
 def download_document(
-    claim_case_id: int,
+    claim_case_id: UUID,
     document_id: int,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
@@ -169,7 +169,7 @@ def download_document(
 
 @router.get("/{claim_case_id}/documents/{document_id}/view")
 def view_document(
-    claim_case_id: int,
+    claim_case_id: UUID,
     document_id: int,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),

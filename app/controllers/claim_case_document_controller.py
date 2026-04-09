@@ -11,7 +11,7 @@ from app.utils.file_storage import save_document, delete_file, get_attachment_fu
 
 
 def upload_documents(
-    db: Session, claim_case_id: int, files: list[UploadFile]
+    db: Session, claim_case_id, files: list[UploadFile]
 ) -> list[ClaimCaseDocument]:
     claim_case = db.query(ClaimCase).filter(ClaimCase.id == claim_case_id).first()
     if not claim_case:
@@ -44,7 +44,7 @@ def upload_documents(
     return documents
 
 
-def list_documents(db: Session, claim_case_id: int) -> list[ClaimCaseDocument]:
+def list_documents(db: Session, claim_case_id) -> list[ClaimCaseDocument]:
     claim_case = db.query(ClaimCase).filter(ClaimCase.id == claim_case_id).first()
     if not claim_case:
         raise HTTPException(
@@ -59,7 +59,7 @@ def list_documents(db: Session, claim_case_id: int) -> list[ClaimCaseDocument]:
     )
 
 
-def delete_document(db: Session, claim_case_id: int, document_id: int) -> None:
+def delete_document(db: Session, claim_case_id, document_id: int) -> None:
     doc = (
         db.query(ClaimCaseDocument)
         .filter(
@@ -80,7 +80,7 @@ def delete_document(db: Session, claim_case_id: int, document_id: int) -> None:
 
 
 def download_document(
-    db: Session, claim_case_id: int, document_id: int
+    db: Session, claim_case_id, document_id: int
 ) -> FileResponse:
     doc = (
         db.query(ClaimCaseDocument)
@@ -111,7 +111,7 @@ def download_document(
 
 
 def view_document(
-    db: Session, claim_case_id: int, document_id: int
+    db: Session, claim_case_id, document_id: int
 ) -> FileResponse:
     doc = (
         db.query(ClaimCaseDocument)

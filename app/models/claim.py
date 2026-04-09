@@ -1,4 +1,5 @@
 from sqlalchemy import Column, BigInteger, String, Numeric, DateTime, ForeignKey, Index, func
+from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import relationship
 
 from app.db.base import Base
@@ -8,7 +9,7 @@ class Claim(Base):
     __tablename__ = "claims"
 
     id = Column(BigInteger, primary_key=True, autoincrement=True)
-    claim_case_id = Column(BigInteger, ForeignKey("claim_cases.id"), unique=True, nullable=False)
+    claim_case_id = Column(UUID(as_uuid=True), ForeignKey("claim_cases.id"), unique=True, nullable=False)
     claimed_amount = Column(Numeric(12, 2), nullable=False)
     approved_amount = Column(Numeric(12, 2), nullable=True)
     status = Column(String, nullable=False, default="SUBMITTED")

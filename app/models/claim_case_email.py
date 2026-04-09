@@ -1,4 +1,5 @@
 from sqlalchemy import Column, BigInteger, String, Text, DateTime, ForeignKey, Index, func
+from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import relationship
 
 from app.db.base import Base
@@ -8,7 +9,7 @@ class ClaimCaseEmail(Base):
     __tablename__ = "claim_case_emails"
 
     id = Column(BigInteger, primary_key=True, autoincrement=True)
-    claim_case_id = Column(BigInteger, ForeignKey("claim_cases.id"), nullable=False)
+    claim_case_id = Column(UUID(as_uuid=True), ForeignKey("claim_cases.id"), nullable=False)
     direction = Column(String, nullable=False)  # "SENT" or "RECEIVED"
     from_email = Column(String, nullable=False)
     to_email = Column(String, nullable=False)

@@ -1,4 +1,5 @@
 from sqlalchemy import Column, BigInteger, String, DateTime, ForeignKey, Index, func
+from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import relationship
 
 from app.db.base import Base
@@ -8,7 +9,7 @@ class ClaimCaseDocument(Base):
     __tablename__ = "claim_case_documents"
 
     id = Column(BigInteger, primary_key=True, autoincrement=True)
-    claim_case_id = Column(BigInteger, ForeignKey("claim_cases.id"), nullable=False)
+    claim_case_id = Column(UUID(as_uuid=True), ForeignKey("claim_cases.id"), nullable=False)
     original_filename = Column(String, nullable=False)
     stored_filename = Column(String, nullable=False)
     file_path = Column(String, nullable=False)

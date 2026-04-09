@@ -17,7 +17,7 @@ from app.utils.file_storage import save_attachment, read_file
 
 def send_form_email(
     db: Session,
-    claim_case_id: int,
+    claim_case_id,
     subject: str,
     content: str,
     pdf_data: bytes | None = None,
@@ -127,7 +127,7 @@ def send_form_email(
 
 def send_query_email(
     db: Session,
-    claim_case_id: int,
+    claim_case_id,
     subject: str,
     content: str,
     pdf_data: bytes | None = None,

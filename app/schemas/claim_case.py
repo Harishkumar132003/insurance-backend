@@ -14,7 +14,7 @@ class ClaimCaseCreate(BaseModel):
 
 
 class ClaimCaseResponse(BaseModel):
-    id: int
+    id: UUID
     uhid: str
     hospital_id: UUID | None = None
     policy_provider_id: UUID
@@ -65,7 +65,7 @@ class QueryLogItem(BaseModel):
 
 
 class ClaimCaseDetailResponse(BaseModel):
-    id: int
+    id: UUID
     uhid: str
     hospital_id: UUID | None = None
     policy_provider_id: UUID
@@ -117,13 +117,13 @@ class ClaimCaseSubmitForm(BaseModel):
 
 
 class ClaimCaseSubmitFormResponse(BaseModel):
-    claim_case_id: int
+    claim_case_id: UUID
     form_data_id: int
     status: str
 
 
 class ClaimListItem(BaseModel):
-    claim_case_id: int
+    claim_case_id: UUID
     patient_name: str | None = None
     claim_number: str | None = None
     claim_status: str | None = None
