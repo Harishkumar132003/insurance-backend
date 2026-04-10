@@ -95,6 +95,7 @@ def send_form_email(
         thread_id=claim_case.thread_id,
         email_type="APPLIED",
         email_date=datetime.now(timezone.utc),
+        is_read=True,
     )
     db.add(email_record)
     db.flush()
@@ -202,6 +203,7 @@ def send_query_email(
         thread_id=claim_case.thread_id,
         email_type="QUERY_RAISED",
         email_date=datetime.now(timezone.utc),
+        is_read=True,
     )
     db.add(email_record)
     db.flush()

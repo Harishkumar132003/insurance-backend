@@ -9,7 +9,7 @@ from app.core.deps import get_current_user
 from app.models.user import User
 from app.schemas.claim_case import ClaimCaseResponse, ClaimCaseDetailResponse, ClaimCaseStatusUpdate, ClaimCaseExtractedDataUpdate, ClaimListItem
 from app.schemas.claim_case_document import ClaimCaseDocumentResponse
-from app.schemas.claim_case_email import ClaimCaseEmailResponse, ClaimCaseEmailListResponse, PaginatedEmailListResponse
+from app.schemas.claim_case_email import ClaimCaseEmailResponse, ClaimCaseEmailListResponse, PaginatedEmailListResponse, ClaimCaseEmailValidateRequest
 from app.controllers import claim_case_controller, claim_case_email_controller, claim_case_document_controller
 
 router = APIRouter(prefix="/claim-cases", tags=["Claim Cases"])
@@ -31,11 +31,12 @@ def get_all_claims(
 def get_all_claim_case_emails(
     page: int = Query(default=1, ge=1, description="Page number"),
     page_size: int = Query(default=20, ge=1, le=100, description="Items per page"),
+    claim_case_id: UUID | None = Query(default=None, description="Filter by claim case ID"),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
     return claim_case_email_controller.get_all_claim_case_emails(
-        db, current_user.hospital_id, page=page, page_size=page_size
+        db, current_user.hospital_id, page=page, page_size=page_size, claim_case_id=claim_case_id
     )
 
 
@@ -87,10 +88,11 @@ def get_claim_case_emails(
 @router.get("/{claim_case_id}/emails/all", response_model=list[ClaimCaseEmailResponse])
 def get_all_emails_with_attachments(
     claim_case_id: UUID,
+    is_read: bool | None = Query(default=None, description="Filter by read status"),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    return claim_case_email_controller.get_all_emails_with_attachments(db, claim_case_id)
+    return claim_case_email_controller.get_all_emails_with_attachments(db, claim_case_id, is_read=is_read)
 
 
 @router.get("/{claim_case_id}/emails/{email_id}", response_model=ClaimCaseEmailResponse)
@@ -101,6 +103,29 @@ def get_claim_case_email_detail(
     current_user: User = Depends(get_current_user),
 ):
     return claim_case_email_controller.get_email_detail(db, claim_case_id, email_id)
+
+
+@router.patch("/{claim_case_id}/emails/{email_id}/read", response_model=ClaimCaseEmailResponse)
+def mark_email_as_read(
+    claim_case_id: UUID,
+    email_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    return claim_case_email_controller.mark_email_as_read(db, claim_case_id, email_id)
+
+
+@router.patch("/{claim_case_id}/emails/{email_id}/validate", response_model=ClaimCaseEmailResponse)
+def validate_email_suggestion(
+    claim_case_id: UUID,
+    email_id: int,
+    payload: ClaimCaseEmailValidateRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    return claim_case_email_controller.validate_email_suggestion(
+        db, claim_case_id, email_id, payload.validation_status, current_user.id, payload.remarks
+    )
 
 
 @router.get("/{claim_case_id}/emails/{email_id}/attachments/{attachment_id}/download")

@@ -24,6 +24,13 @@ class ClaimCaseEmailResponse(BaseModel):
     subject: str | None = None
     body: str | None = None
     email_date: datetime | None = None
+    is_read: bool = False
+    ai_suggested_status: str | None = None
+    ai_suggested_amount: float | None = None
+    ai_suggested_claim_number: str | None = None
+    validation_status: str = "PENDING"
+    validated_at: datetime | None = None
+    validated_by: UUID | None = None
     created_at: datetime
     attachments: list[ClaimCaseEmailAttachmentResponse] = []
 
@@ -38,6 +45,9 @@ class ClaimCaseEmailListResponse(BaseModel):
     to_email: str
     subject: str | None = None
     email_date: datetime | None = None
+    is_read: bool = False
+    ai_suggested_status: str | None = None
+    validation_status: str = "PENDING"
     created_at: datetime
     attachment_count: int = 0
 
@@ -54,8 +64,18 @@ class AllClaimCaseEmailListItem(BaseModel):
     to_email: str
     subject: str | None = None
     email_date: datetime | None = None
+    is_read: bool = False
+    ai_suggested_status: str | None = None
+    validation_status: str = "PENDING"
+    is_latest: bool = False
     created_at: datetime
     attachment_count: int = 0
+    attachments: list[ClaimCaseEmailAttachmentResponse] = []
+
+
+class ClaimCaseEmailValidateRequest(BaseModel):
+    validation_status: str  # "APPROVED" or "REJECTED"
+    remarks: str | None = None
 
 
 class PaginatedEmailListResponse(BaseModel):

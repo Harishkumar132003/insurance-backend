@@ -17,8 +17,6 @@ from app.models.claim_case import ClaimCase
 from app.models.claim_case_email import ClaimCaseEmail
 from app.models.claim_case_email_attachment import ClaimCaseEmailAttachment
 from app.models.policy_provider_config import PolicyProviderConfig
-from app.models.query_log import QueryLog
-from app.models.status_history import StatusHistory
 from app.utils.file_storage import save_attachment
 
 logger = logging.getLogger(__name__)
@@ -193,57 +191,20 @@ def _process_single_email(db: Session, email_data: dict):
         logger.info(f"No matching APPLIED claim case found for email: {subject}")
         return
 
-    # 4. Update ClaimCase (claim_status, not status)
-    claim_case.claim_status = extracted_status
-    if claim_number and not claim_case.claim_number:
-        claim_case.claim_number = claim_number
-    if extracted_status == "APPROVED" and approved_amount is not None:
-        try:
-            claim_case.approved_amount = float(approved_amount)
-        except (ValueError, TypeError):
-            logger.warning(f"Could not parse approved_amount: {approved_amount}")
-
-    # 5. If QUERY/ADR → create QueryLog
-    if extracted_status in ("QUERY", "ADR"):
-        db.add(QueryLog(
-            claim_case_id=claim_case.id,
-            query_type=extracted_status,
-            query_details=query_details or summary,
-            documents_requested=documents_requested,
-            status="OPEN",
-        ))
-        logger.info(f"Created QueryLog ({extracted_status}) for ClaimCase #{claim_case.id}")
-
-    # 6. If APPROVED/REJECTED → resolve any OPEN query logs
-    if extracted_status in ("APPROVED", "REJECTED"):
-        from datetime import datetime, timezone
-        open_queries = (
-            db.query(QueryLog)
-            .filter(QueryLog.claim_case_id == claim_case.id, QueryLog.status == "OPEN")
-            .all()
-        )
-        for q in open_queries:
-            q.status = "RESOLVED"
-            q.resolved_at = datetime.now(timezone.utc)
-        if open_queries:
-            logger.info(f"Resolved {len(open_queries)} open query log(s) for ClaimCase #{claim_case.id}")
-
-    # 7. Add StatusHistory
-    db.add(StatusHistory(
-        claim_case_id=claim_case.id,
-        stage=claim_case.current_stage,
-        status=extracted_status,
-        remarks=summary,
-        changed_by="EMAIL_AUTO_READER",
-    ))
-
-    # 8. Persist the received email and attachments
-    _persist_email_record(db, claim_case, email_data, thread_id, extracted_status)
+    # 4. Persist the received email with AI suggestions (no direct status update)
+    _persist_email_record(
+        db, claim_case, email_data, thread_id, extracted_status,
+        ai_suggested_amount=approved_amount,
+        ai_suggested_claim_number=claim_number,
+        ai_summary=summary,
+        ai_query_details=query_details,
+        ai_documents_requested=documents_requested,
+    )
 
     db.commit()
     logger.info(
-        f"Updated ClaimCase #{claim_case.id} (uhid={claim_case.uhid}): "
-        f"claim_status={extracted_status}, claim_number={claim_number}, summary={summary[:100]}"
+        f"Stored AI suggestion for ClaimCase #{claim_case.id} (uhid={claim_case.uhid}): "
+        f"suggested_status={extracted_status}, claim_number={claim_number}, amount={approved_amount}"
     )
 
 
@@ -466,8 +427,13 @@ STATUS_TO_EMAIL_TYPE = {
 }
 
 
-def _persist_email_record(db: Session, claim_case: ClaimCase, email_data: dict, thread_id: str | None, extracted_status: str | None = None):
-    """Persist a received email and its attachments to the database."""
+def _persist_email_record(
+    db: Session, claim_case: ClaimCase, email_data: dict, thread_id: str | None,
+    extracted_status: str | None = None, ai_suggested_amount=None,
+    ai_suggested_claim_number: str | None = None, ai_summary: str | None = None,
+    ai_query_details: str | None = None, ai_documents_requested: str | None = None,
+):
+    """Persist a received email and its attachments with AI suggestions to the database."""
     message_id = email_data.get("message_id", "")
 
     # Dedup by message_id
@@ -492,6 +458,13 @@ def _persist_email_record(db: Session, claim_case: ClaimCase, email_data: dict, 
         thread_id=thread_id,
         email_type=email_type,
         email_date=_parse_email_date(email_data.get("date", "")),
+        ai_suggested_status=extracted_status,
+        ai_suggested_amount=ai_suggested_amount,
+        ai_suggested_claim_number=ai_suggested_claim_number,
+        ai_summary=ai_summary,
+        ai_query_details=ai_query_details,
+        ai_documents_requested=ai_documents_requested,
+        validation_status="PENDING",
     )
     db.add(email_record)
     db.flush()

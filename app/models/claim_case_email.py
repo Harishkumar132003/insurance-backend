@@ -1,4 +1,4 @@
-from sqlalchemy import Column, BigInteger, String, Text, DateTime, ForeignKey, Index, func
+from sqlalchemy import Column, BigInteger, Boolean, String, Text, DateTime, ForeignKey, Index, Numeric, func
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import relationship
 
@@ -19,6 +19,19 @@ class ClaimCaseEmail(Base):
     email_type = Column(String, nullable=True)  # QUERY_RAISED, QUERY_RESPONSE, APPROVAL, REJECTION, ADR
     thread_id = Column(String, nullable=True)
     email_date = Column(DateTime(timezone=True), nullable=True)
+
+    # AI suggestion & validation fields
+    is_read = Column(Boolean, nullable=False, default=False, server_default="false")
+    ai_suggested_status = Column(String, nullable=True)
+    ai_suggested_amount = Column(Numeric(12, 2), nullable=True)
+    ai_suggested_claim_number = Column(String, nullable=True)
+    ai_summary = Column(Text, nullable=True)
+    ai_query_details = Column(Text, nullable=True)
+    ai_documents_requested = Column(Text, nullable=True)
+    validation_status = Column(String, nullable=False, default="PENDING", server_default="PENDING")
+    validated_at = Column(DateTime(timezone=True), nullable=True)
+    validated_by = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=True)
+
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
     claim_case = relationship("ClaimCase", back_populates="emails")

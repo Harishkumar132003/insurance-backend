@@ -88,6 +88,7 @@ def get_claim_case(db: Session, claim_case_id) -> ClaimCase:
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Claim case not found",
         )
+    claim_case.unread_count = sum(1 for e in claim_case.emails if not e.is_read)
     return claim_case
 
 
@@ -159,6 +160,9 @@ def update_extracted_data(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Email not found for this claim case",
         )
+
+    # Mark email as read
+    email_record.is_read = True
 
     # Update email_type: explicit value takes priority, otherwise auto-derive from claim_status
     if payload.email_type is not None:

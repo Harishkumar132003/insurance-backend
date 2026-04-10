@@ -82,6 +82,7 @@ class ClaimCaseDetailResponse(BaseModel):
     query_logs: list[QueryLogItem] = []
     emails: list["ClaimCaseEmailListItem"] = []
     documents: list[ClaimCaseDocumentResponse] = []
+    unread_count: int = 0
 
     model_config = {"from_attributes": True}
 
@@ -93,6 +94,9 @@ class ClaimCaseEmailListItem(BaseModel):
     to_email: str
     subject: str | None = None
     email_date: datetime | None = None
+    is_read: bool = False
+    ai_suggested_status: str | None = None
+    validation_status: str = "PENDING"
     created_at: datetime
 
     model_config = {"from_attributes": True}
