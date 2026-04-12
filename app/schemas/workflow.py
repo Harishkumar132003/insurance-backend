@@ -18,6 +18,7 @@ class StepDebug(BaseModel):
 
 class WorkflowRunResponse(BaseModel):
     summary: str
+    data: dict[str, Any]
 
 
 class PolicyWorkflowRunResponse(BaseModel):

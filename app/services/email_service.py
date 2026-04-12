@@ -16,11 +16,13 @@ def send_email(
     subject: str,
     body: str,
     attachments: list[tuple[bytes, str, str]] | None = None,
+    cc_emails: list[str] | None = None,
 ) -> None:
-    """Send an email with optional attachments.
+    """Send an email with optional attachments and CC recipients.
 
     Args:
         attachments: List of (file_bytes, filename, content_type) tuples.
+        cc_emails: List of CC email addresses.
     """
     if not settings.EMAIL_ADDRESS or not settings.EMAIL_APP_PASSWORD:
         raise HTTPException(
@@ -31,6 +33,8 @@ def send_email(
     msg = MIMEMultipart("mixed")
     msg["From"] = settings.EMAIL_ADDRESS
     msg["To"] = to_email
+    if cc_emails:
+        msg["Cc"] = ", ".join(cc_emails)
     msg["Subject"] = subject
     msg.attach(MIMEText(body, "html"))
 
@@ -43,10 +47,12 @@ def send_email(
             part.add_header("Content-Disposition", "attachment", filename=filename)
             msg.attach(part)
 
+    recipients = [to_email] + (cc_emails or [])
+
     try:
         with smtplib.SMTP_SSL("smtp.gmail.com", 465) as server:
             server.login(settings.EMAIL_ADDRESS, settings.EMAIL_APP_PASSWORD)
-            server.sendmail(settings.EMAIL_ADDRESS, to_email, msg.as_string())
+            server.sendmail(settings.EMAIL_ADDRESS, recipients, msg.as_string())
     except smtplib.SMTPException as e:
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
@@ -55,49 +61,7 @@ def send_email(
 
 
 def render_form_data_html(form_data, template) -> str:
-    sections = template.schema_json.get("sections", [])
-    data = form_data.data_json or {}
-
-    html = f"""
-    <html>
-    <head>
-        <style>
-            body {{ font-family: Arial, sans-serif; margin: 20px; }}
-            h2 {{ color: #2c3e50; border-bottom: 2px solid #3498db; padding-bottom: 5px; }}
-            h3 {{ color: #34495e; margin-top: 20px; }}
-            table {{ border-collapse: collapse; width: 100%; margin-bottom: 20px; }}
-            th, td {{ border: 1px solid #ddd; padding: 10px; text-align: left; }}
-            th {{ background-color: #3498db; color: white; width: 35%; }}
-            td {{ background-color: #f9f9f9; }}
-        </style>
-    </head>
-    <body>
-        <h2>{template.name} (v{template.version})</h2>
-        <p><strong>Claim Case ID:</strong> {form_data.claim_case_id}</p>
-        <p><strong>Status:</strong> {form_data.status}</p>
-    """
-
-    for section in sections:
-        section_name = section.get("name", "")
-        section_label = section.get("label", section_name.replace("_", " ").title())
-        section_data = data.get(section_name, {})
-
-        html += f"<h3>{section_label}</h3><table>"
-
-        for field in section.get("fields", []):
-            key = field["key"]
-            label = field.get("label", key.replace("_", " ").title())
-            value = section_data.get(key, "—") if isinstance(section_data, dict) else "—"
-
-            if isinstance(value, list):
-                value = ", ".join(str(v) for v in value)
-
-            html += f"<tr><th>{label}</th><td>{value}</td></tr>"
-
-        html += "</table>"
-
-    html += "</body></html>"
-    return html
+    return template.html_content or ""
 
 
 def fetch_inbox(limit: int = 10) -> list[dict]:

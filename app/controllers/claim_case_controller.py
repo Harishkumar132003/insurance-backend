@@ -1,6 +1,7 @@
 from datetime import datetime, timezone
 from uuid import UUID
 
+import sqlalchemy as sa
 from fastapi import HTTPException, status
 from sqlalchemy.orm import Session
 
@@ -8,6 +9,7 @@ from app.models.claim import Claim
 from app.models.claim_case import ClaimCase
 from app.models.claim_case_email import ClaimCaseEmail
 from app.models.form_data import FormData
+from app.models.cc_email import CcEmail
 from app.models.policy_provider_config import PolicyProviderConfig
 from app.models.query_log import QueryLog
 from app.models.status_history import StatusHistory
@@ -89,6 +91,22 @@ def get_claim_case(db: Session, claim_case_id) -> ClaimCase:
             detail="Claim case not found",
         )
     claim_case.unread_count = sum(1 for e in claim_case.emails if not e.is_read)
+
+    # Fetch policy provider email
+    provider = db.query(PolicyProviderConfig).filter(
+        PolicyProviderConfig.id == claim_case.policy_provider_id
+    ).first()
+    claim_case.policy_provider_email = provider.email if provider else None
+
+    # Fetch CC emails matching this hospital and/or provider
+    cc_query = db.query(CcEmail)
+    filters = []
+    if claim_case.hospital_id:
+        filters.append(CcEmail.hospital_id == claim_case.hospital_id)
+    filters.append(CcEmail.policy_provider_id == claim_case.policy_provider_id)
+    cc_emails = cc_query.filter(sa.or_(*filters)).all()
+    claim_case.cc_emails = [cc.email for cc in cc_emails]
+
     return claim_case
 
 

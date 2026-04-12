@@ -15,8 +15,10 @@ router = APIRouter(prefix="/email", tags=["Email"])
 @router.post("/send", response_model=SendEmailResponse)
 async def send_form_email(
     claim_case_id: UUID = Form(...),
+    to_email: str = Form(...),
     subject: str = Form(...),
     content: str = Form(...),
+    cc_emails: list[str] = Form(default=[]),
     file: UploadFile = File(None),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
@@ -25,8 +27,10 @@ async def send_form_email(
     return email_controller.send_form_email(
         db=db,
         claim_case_id=claim_case_id,
+        to_email=to_email,
         subject=subject,
         content=content,
+        cc_emails=cc_emails,
         pdf_data=pdf_data,
         pdf_filename=file.filename or "form.pdf" if file else "form.pdf",
     )
@@ -35,8 +39,10 @@ async def send_form_email(
 @router.post("/query", response_model=SendEmailResponse)
 async def send_query_email(
     claim_case_id: UUID = Form(...),
+    to_email: str = Form(...),
     subject: str = Form(...),
     content: str = Form(...),
+    cc_emails: list[str] = Form(default=[]),
     file: UploadFile = File(None),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
@@ -45,8 +51,10 @@ async def send_query_email(
     return email_controller.send_query_email(
         db=db,
         claim_case_id=claim_case_id,
+        to_email=to_email,
         subject=subject,
         content=content,
+        cc_emails=cc_emails,
         pdf_data=pdf_data,
         pdf_filename=file.filename or "form.pdf" if file else "form.pdf",
     )

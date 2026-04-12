@@ -21,12 +21,22 @@ def create_form_template(db: Session, payload: FormTemplateCreate) -> FormTempla
         name=payload.name,
         version=payload.version,
         policy_provider_id=payload.policy_provider_id,
-        schema_json=payload.schema_json,
+        html_content=payload.html_content,
         is_active=True,
     )
     db.add(template)
     db.commit()
     db.refresh(template)
+    return template
+
+
+def get_form_template_by_id(db: Session, template_id: int) -> FormTemplate:
+    template = db.query(FormTemplate).filter(FormTemplate.id == template_id).first()
+    if not template:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Form template not found",
+        )
     return template
 
 
@@ -43,6 +53,10 @@ def get_first_form_template(db: Session) -> FormTemplate:
             detail="No active form template found",
         )
     return template
+
+
+def get_all_form_templates(db: Session):
+    return db.query(FormTemplate).all()
 
 
 def get_form_template_by_provider(db: Session, policy_provider_id) -> FormTemplate:

@@ -10,7 +10,12 @@ def get_all_hospitals(db: Session):
 
 
 def create_hospital(db: Session, payload: HospitalCreate):
-    hospital = Hospital(name=payload.name)
+    hospital = Hospital(
+        name=payload.name,
+        address=payload.address,
+        rohini_id=payload.rohini_id,
+        email=payload.email,
+    )
     db.add(hospital)
     db.commit()
     db.refresh(hospital)

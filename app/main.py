@@ -26,6 +26,8 @@ from app.routes.form_data_routes import router as form_data_router
 from app.routes.email_routes import router as email_router
 from app.routes.email_template_routes import router as email_template_router
 from app.routes.claim_case_routes import router as claim_case_router
+from app.routes.mock_routes import router as mock_router
+from app.routes.cc_email_routes import router as cc_email_router
 
 def _run_migrations():
     """Add missing columns to existing tables."""
@@ -72,6 +74,8 @@ app.include_router(form_data_router, prefix="/api/v1")
 app.include_router(email_router, prefix="/api/v1")
 app.include_router(email_template_router, prefix="/api/v1")
 app.include_router(claim_case_router, prefix="/api/v1")
+app.include_router(mock_router, prefix="/api/v1")
+app.include_router(cc_email_router, prefix="/api/v1")
 
 
 @app.get("/health")

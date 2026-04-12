@@ -83,6 +83,8 @@ class ClaimCaseDetailResponse(BaseModel):
     emails: list["ClaimCaseEmailListItem"] = []
     documents: list[ClaimCaseDocumentResponse] = []
     unread_count: int = 0
+    policy_provider_email: str | None = None
+    cc_emails: list[str] = []
 
     model_config = {"from_attributes": True}
 

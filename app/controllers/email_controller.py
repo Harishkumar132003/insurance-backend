@@ -18,8 +18,10 @@ from app.utils.file_storage import save_attachment, read_file
 def send_form_email(
     db: Session,
     claim_case_id,
+    to_email: str,
     subject: str,
     content: str,
+    cc_emails: list[str] | None = None,
     pdf_data: bytes | None = None,
     pdf_filename: str = "form.pdf",
 ) -> dict:
@@ -31,27 +33,12 @@ def send_form_email(
             detail="Claim case not found",
         )
 
-    # 2. Fetch provider and get email
-    provider = db.query(PolicyProviderConfig).filter(
-        PolicyProviderConfig.id == claim_case.policy_provider_id
-    ).first()
-    if not provider:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Policy provider not found",
-        )
-    if not provider.email:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Policy provider does not have an email configured",
-        )
-
-    # 3. Generate thread_id if not exists and append to subject
+    # 2. Generate thread_id if not exists and append to subject
     if not claim_case.thread_id:
         claim_case.thread_id = uuid.uuid4().hex[:12]
     subject = f"{subject} [{claim_case.thread_id}]"
 
-    # 4. Build attachments list: form PDF + uploaded documents
+    # 3. Build attachments list: form PDF + uploaded documents
     attachments: list[tuple[bytes, str, str]] = []
     if pdf_data:
         attachments.append((pdf_data, pdf_filename, "application/pdf"))
@@ -67,29 +54,30 @@ def send_form_email(
             doc.content_type or "application/octet-stream",
         ))
 
-    # 5. Send email with all attachments
+    # 4. Send email with all attachments and CC
     send_email(
-        to_email=provider.email,
+        to_email=to_email,
         subject=subject,
         body=content,
         attachments=attachments or None,
+        cc_emails=cc_emails or None,
     )
 
-    # 6. Update claim_case status to APPLIED
+    # 5. Update claim_case status to APPLIED
     claim_case.status = "APPLIED"
     db.add(StatusHistory(
         claim_case_id=claim_case.id,
         stage="PRE_AUTH",
         status="APPLIED",
-        remarks=f"Email sent to {provider.email}",
+        remarks=f"Email sent to {to_email}",
     ))
 
-    # 7. Persist the sent email record
+    # 6. Persist the sent email record
     email_record = ClaimCaseEmail(
         claim_case_id=claim_case.id,
         direction="SENT",
         from_email=settings.EMAIL_ADDRESS,
-        to_email=provider.email,
+        to_email=to_email,
         subject=subject,
         body=content,
         thread_id=claim_case.thread_id,
@@ -100,7 +88,7 @@ def send_form_email(
     db.add(email_record)
     db.flush()
 
-    # 8. Save attachment records for audit trail
+    # 7. Save attachment records for audit trail
     for file_bytes, filename, content_type in attachments:
         stored_filename, file_path = save_attachment(
             claim_case.id, file_bytes, filename
@@ -120,7 +108,7 @@ def send_form_email(
 
     return {
         "message": "Email sent successfully",
-        "to_email": provider.email,
+        "to_email": to_email,
         "subject": subject,
         "status": claim_case.status,
     }
@@ -129,8 +117,10 @@ def send_form_email(
 def send_query_email(
     db: Session,
     claim_case_id,
+    to_email: str,
     subject: str,
     content: str,
+    cc_emails: list[str] | None = None,
     pdf_data: bytes | None = None,
     pdf_filename: str = "form.pdf",
 ) -> dict:
@@ -145,20 +135,6 @@ def send_query_email(
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Claim case does not have a thread_id. Send an initial email first.",
-        )
-
-    provider = db.query(PolicyProviderConfig).filter(
-        PolicyProviderConfig.id == claim_case.policy_provider_id
-    ).first()
-    if not provider:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Policy provider not found",
-        )
-    if not provider.email:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Policy provider does not have an email configured",
         )
 
     subject = f"{subject} [{claim_case.thread_id}]"
@@ -180,24 +156,25 @@ def send_query_email(
         ))
 
     send_email(
-        to_email=provider.email,
+        to_email=to_email,
         subject=subject,
         body=content,
         attachments=attachments or None,
+        cc_emails=cc_emails or None,
     )
 
     db.add(StatusHistory(
         claim_case_id=claim_case.id,
         stage=claim_case.current_stage,
         status="QUERY_RAISED",
-        remarks=f"Query email sent to {provider.email}",
+        remarks=f"Query email sent to {to_email}",
     ))
 
     email_record = ClaimCaseEmail(
         claim_case_id=claim_case.id,
         direction="SENT",
         from_email=settings.EMAIL_ADDRESS,
-        to_email=provider.email,
+        to_email=to_email,
         subject=subject,
         body=content,
         thread_id=claim_case.thread_id,
@@ -226,7 +203,7 @@ def send_query_email(
 
     return {
         "message": "Query email sent successfully",
-        "to_email": provider.email,
+        "to_email": to_email,
         "subject": subject,
         "status": claim_case.status,
     }

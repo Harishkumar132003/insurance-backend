@@ -17,3 +17,4 @@ from app.models.query_log import QueryLog
 from app.models.claim_case_email import ClaimCaseEmail
 from app.models.claim_case_email_attachment import ClaimCaseEmailAttachment
 from app.models.claim_case_document import ClaimCaseDocument
+from app.models.cc_email import CcEmail

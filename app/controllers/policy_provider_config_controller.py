@@ -14,7 +14,15 @@ def create_provider(db: Session, payload: PolicyProviderCreate):
         "steps": [s.model_dump() for s in payload.steps],
         "required_fields": payload.required_fields,
     }
-    provider = PolicyProviderConfig(provider_id=payload.provider_id, name=payload.name, config=config_data)
+    provider = PolicyProviderConfig(
+        provider_id=payload.provider_id,
+        name=payload.name,
+        email=payload.email,
+        tpa_name=payload.tpa_name,
+        tpa_toll_free_phone=payload.tpa_toll_free_phone,
+        tpa_toll_free_fax=payload.tpa_toll_free_fax,
+        config=config_data,
+    )
     db.add(provider)
     db.commit()
     db.refresh(provider)
@@ -45,6 +53,12 @@ def update_provider(db: Session, provider_id: UUID, payload: PolicyProviderUpdat
         provider.provider_id = payload.provider_id
     if payload.name is not None:
         provider.name = payload.name
+    if payload.tpa_name is not None:
+        provider.tpa_name = payload.tpa_name
+    if payload.tpa_toll_free_phone is not None:
+        provider.tpa_toll_free_phone = payload.tpa_toll_free_phone
+    if payload.tpa_toll_free_fax is not None:
+        provider.tpa_toll_free_fax = payload.tpa_toll_free_fax
     config = provider.config.copy()
     if payload.auth is not None:
         config["auth"] = payload.auth.model_dump()

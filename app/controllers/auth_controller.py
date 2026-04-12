@@ -18,4 +18,13 @@ def login(db: Session, payload: LoginRequest):
         "role": user.role,
         "hospital_id": str(user.hospital_id) if user.hospital_id else None,
     })
-    return {"access_token": access_token, "token_type": "bearer"}
+    response = {"access_token": access_token, "token_type": "bearer"}
+    if user.role == "HOSPITAL_ADMIN" and user.hospital:
+        response["hospital"] = {
+            "id": str(user.hospital.id),
+            "name": user.hospital.name,
+            "address": user.hospital.address,
+            "rohini_id": user.hospital.rohini_id,
+            "email": user.hospital.email,
+        }
+    return response

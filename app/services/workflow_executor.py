@@ -190,6 +190,20 @@ async def execute_workflow(
         )
 
     rendered_prompt = prompt_row.prompt_text
+
+    # Build response-mapping-only data (exclude global vars and input)
+    skip_keys = set(global_vars.keys()) | set(input_data.keys())
+    response_mapping_data = {
+        k: v for k, v in result["data"].items() if k not in skip_keys
+    }
+
+    # Replace {pre_auth_form_data} with all response mapping fields
+    if "{pre_auth_form_data}" in rendered_prompt:
+        form_data_str = "\n".join(
+            f"{key}: {value}" for key, value in response_mapping_data.items()
+        )
+        rendered_prompt = rendered_prompt.replace("{pre_auth_form_data}", form_data_str)
+
     for key, value in result["data"].items():
         rendered_prompt = rendered_prompt.replace(
             "{" + key + "}", str(value) if value is not None else ""
@@ -200,4 +214,4 @@ async def execute_workflow(
     summary = await summarize_with_openai(rendered_prompt)
     print(f"[WORKFLOW] summary={summary}")
 
-    return {"summary": summary}
+    return {"summary": summary, "data": result["data"]}
