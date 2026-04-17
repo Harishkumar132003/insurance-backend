@@ -1,15 +1,15 @@
 from uuid import UUID
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Request
 from sqlalchemy.orm import Session
 
 from app.db.session import get_db
 from app.core.deps import get_current_user, require_super_admin
 from app.models.user import User
 from app.schemas.policy_provider_config import PolicyProviderCreate, PolicyProviderUpdate, PolicyProviderResponse
-from app.schemas.workflow import WorkflowRunRequest, WorkflowRunResponse, PolicyWorkflowRunResponse
+from app.schemas.workflow import PolicyWorkflowRunResponse
 from app.controllers import policy_provider_config_controller
-from app.services.workflow_executor import execute_workflow_from_config
+from app.services.workflow_executor import execute_policy_workflow_with_summary
 
 router = APIRouter(tags=["Policy Providers"])
 
@@ -63,8 +63,31 @@ def delete_provider(
 async def run_policy_workflow(
     provider_id: str,
     policy_id: str,
+    request: Request,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
+    uploaded_file = None
+    content_type = request.headers.get("content-type", "")
+    if content_type.startswith("multipart/form-data"):
+        form = await request.form()
+        uploaded_file = form.get("file")
+
+    file_name: str | None = None
+    file_content_type: str | None = None
+    file_bytes: bytes | None = None
+
+    if uploaded_file is not None and hasattr(uploaded_file, "read"):
+        file_name = getattr(uploaded_file, "filename", None)
+        file_content_type = getattr(uploaded_file, "content_type", None)
+        file_bytes = await uploaded_file.read()
+
     provider = policy_provider_config_controller.get_provider_by_provider_id(db, provider_id)
-    return await execute_workflow_from_config(provider.config, {"policy_id": policy_id})
+    return await execute_policy_workflow_with_summary(
+        db,
+        provider.config,
+        {"policy_id": policy_id},
+        file_name=file_name,
+        file_content_type=file_content_type,
+        file_bytes=file_bytes,
+    )

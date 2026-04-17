@@ -11,6 +11,13 @@ class HospitalCreate(BaseModel):
     email: str | None = None
 
 
+class HospitalUpdate(BaseModel):
+    name: str | None = None
+    address: str | None = None
+    rohini_id: str | None = None
+    email: str | None = None
+
+
 class HospitalResponse(BaseModel):
     id: UUID
     name: str

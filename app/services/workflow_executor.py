@@ -1,14 +1,62 @@
+import io
+import json
 from typing import Any
 from uuid import UUID
 
 import httpx
 from fastapi import HTTPException, status
+from PyPDF2 import PdfReader
 from sqlalchemy.orm import Session
 
 from app.models.hospital_config import HospitalConfig
 from app.models.hospital_prompt import HospitalPrompt
+from app.models.summary_prompt_template import SummaryPromptTemplate
 from app.services.openai_service import summarize_with_openai
 from app.utils.template import render_template, extract_fields
+
+
+def _get_summary_prompt_text(db: Session, key: str, default_prompt: str) -> str:
+    prompt = (
+        db.query(SummaryPromptTemplate)
+        .filter(SummaryPromptTemplate.key == key)
+        .first()
+    )
+    if not prompt:
+        return default_prompt
+    return prompt.prompt_text
+
+
+def _extract_file_text(
+    file_bytes: bytes | None,
+    file_name: str | None,
+    file_content_type: str | None,
+    max_chars: int = 12000,
+) -> str:
+    if not file_bytes:
+        return ""
+
+    is_pdf = (
+        (file_content_type or "").lower() == "application/pdf"
+        or ((file_name or "").lower().endswith(".pdf"))
+    )
+
+    try:
+        if is_pdf:
+            reader = PdfReader(io.BytesIO(file_bytes))
+            extracted_parts: list[str] = []
+            for page in reader.pages:
+                page_text = page.extract_text()
+                if page_text:
+                    extracted_parts.append(page_text)
+            text = "\n".join(extracted_parts).strip()
+        else:
+            text = file_bytes.decode("utf-8", errors="replace").strip()
+    except Exception:
+        text = ""
+
+    if not text:
+        return ""
+    return text[:max_chars]
 
 
 async def call_api(
@@ -156,6 +204,44 @@ async def execute_workflow_from_config(
     }
 
 
+async def execute_policy_workflow_with_summary(
+    db: Session,
+    config: dict[str, Any],
+    input_data: dict[str, Any],
+    file_name: str | None = None,
+    file_content_type: str | None = None,
+    file_bytes: bytes | None = None,
+) -> dict[str, Any]:
+    """Execute provider workflow and summarize the mapped output via OpenAI."""
+    result = await execute_workflow_from_config(config, input_data)
+    file_text = _extract_file_text(file_bytes, file_name, file_content_type)
+
+    policy_key = "policy-summary"
+    default_prompt = (
+        "Summarize this policy workflow response in plain language. "
+        "Keep it concise and include key policy details, approval/rejection indicators, "
+        "and notable amounts or dates if present.\n\n"
+        "Response JSON:\n{response_json}\n\n"
+        "Attached file context:\n{file_context}"
+    )
+    prompt_template = _get_summary_prompt_text(db, policy_key, default_prompt)
+    prompt = (
+        prompt_template
+        .replace(
+            "{response_json}",
+            json.dumps(result["data"], ensure_ascii=False, default=str, indent=2),
+        )
+        .replace("{file_context}", file_text or "No file context provided")
+    )
+
+    summary = await summarize_with_openai(prompt)
+    return {
+        "summary": summary,
+        "data": result["data"],
+        "steps_debug": result["steps_debug"],
+    }
+
+
 async def execute_workflow(
     db: Session, hospital_id: UUID, input_data: dict[str, Any]
 ) -> dict[str, Any]:
@@ -215,3 +301,25 @@ async def execute_workflow(
     print(f"[WORKFLOW] summary={summary}")
 
     return {"summary": summary, "data": result["data"]}
+
+
+async def summarize_patient_policy_context(
+    db: Session,
+    patient: dict[str, Any],
+    policy: dict[str, Any],
+) -> dict[str, Any]:
+    default_prompt = (
+        "Create a concise medical insurance context summary from the provided patient and policy data. "
+        "Highlight patient identity details, admission/treatment context if present, policy coverage/restrictions, "
+        "and any important gaps or missing fields.\n\n"
+        "Patient JSON:\n{patient_json}\n\n"
+        "Policy JSON:\n{policy_json}"
+    )
+    prompt_template = _get_summary_prompt_text(db, "/summarize-context", default_prompt)
+    prompt = (
+        prompt_template
+        .replace("{patient_json}", json.dumps(patient, ensure_ascii=False, default=str, indent=2))
+        .replace("{policy_json}", json.dumps(policy, ensure_ascii=False, default=str, indent=2))
+    )
+    summary = await summarize_with_openai(prompt)
+    return {"summary": summary}

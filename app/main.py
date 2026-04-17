@@ -28,6 +28,9 @@ from app.routes.email_template_routes import router as email_template_router
 from app.routes.claim_case_routes import router as claim_case_router
 from app.routes.mock_routes import router as mock_router
 from app.routes.cc_email_routes import router as cc_email_router
+from app.routes.summary_prompt_template_routes import router as summary_prompt_template_router
+from app.models.summary_prompt_template import SummaryPromptTemplate
+from sqlalchemy.orm import Session
 
 def _run_migrations():
     """Add missing columns to existing tables."""
@@ -43,10 +46,40 @@ def _run_migrations():
         conn.commit()
 
 
+def _seed_summary_prompts():
+    default_prompts: dict[str, str] = {
+        "/summarize-context": (
+            "Create a concise medical insurance context summary from the provided patient and policy data. "
+            "Highlight patient identity details, admission/treatment context if present, policy coverage/restrictions, "
+            "and any important gaps or missing fields.\\n\\n"
+            "Patient JSON:\\n{patient_json}\\n\\n"
+            "Policy JSON:\\n{policy_json}"
+        ),
+        "policy-summary": (
+            "Summarize this policy workflow response in plain language. "
+            "Keep it concise and include key policy details, approval/rejection indicators, and notable amounts or dates.\\n\\n"
+            "Response JSON:\\n{response_json}\\n\\n"
+            "Attached file context:\\n{file_context}"
+        ),
+    }
+
+    with Session(bind=engine) as db:
+        for key, prompt_text in default_prompts.items():
+            existing = (
+                db.query(SummaryPromptTemplate)
+                .filter(SummaryPromptTemplate.key == key)
+                .first()
+            )
+            if not existing:
+                db.add(SummaryPromptTemplate(key=key, prompt_text=prompt_text))
+        db.commit()
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     Base.metadata.create_all(bind=engine)
     _run_migrations()
+    _seed_summary_prompts()
     start_email_scheduler()
     yield
     stop_email_scheduler()
@@ -76,6 +109,7 @@ app.include_router(email_template_router, prefix="/api/v1")
 app.include_router(claim_case_router, prefix="/api/v1")
 app.include_router(mock_router, prefix="/api/v1")
 app.include_router(cc_email_router, prefix="/api/v1")
+app.include_router(summary_prompt_template_router, prefix="/api/v1")
 
 
 @app.get("/health")

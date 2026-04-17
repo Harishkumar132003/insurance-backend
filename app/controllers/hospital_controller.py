@@ -2,7 +2,7 @@ from fastapi import HTTPException, status
 from sqlalchemy.orm import Session
 
 from app.models.hospital import Hospital
-from app.schemas.hospital import HospitalCreate
+from app.schemas.hospital import HospitalCreate, HospitalUpdate
 
 
 def get_all_hospitals(db: Session):
@@ -17,6 +17,15 @@ def create_hospital(db: Session, payload: HospitalCreate):
         email=payload.email,
     )
     db.add(hospital)
+    db.commit()
+    db.refresh(hospital)
+    return hospital
+
+
+def update_hospital(db: Session, hospital_id, payload: HospitalUpdate):
+    hospital = get_hospital(db, hospital_id)
+    for field, value in payload.model_dump(exclude_unset=True).items():
+        setattr(hospital, field, value)
     db.commit()
     db.refresh(hospital)
     return hospital

@@ -4,7 +4,9 @@ from sqlalchemy.orm import Session
 from app.db.session import get_db
 from app.core.deps import get_current_user, require_super_admin
 from app.models.user import User
-from app.schemas.hospital import HospitalCreate, HospitalResponse
+from uuid import UUID
+
+from app.schemas.hospital import HospitalCreate, HospitalUpdate, HospitalResponse
 from app.controllers import hospital_controller
 
 router = APIRouter(prefix="/hospitals", tags=["Hospitals"])
@@ -25,3 +27,13 @@ def create_hospital(
     current_user: User = Depends(require_super_admin),
 ):
     return hospital_controller.create_hospital(db, payload)
+
+
+@router.put("/{hospital_id}", response_model=HospitalResponse)
+def update_hospital(
+    hospital_id: UUID,
+    payload: HospitalUpdate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_super_admin),
+):
+    return hospital_controller.update_hospital(db, hospital_id, payload)

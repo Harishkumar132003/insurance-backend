@@ -7,6 +7,11 @@ class WorkflowRunRequest(BaseModel):
     input: dict[str, Any]
 
 
+class ContextSummaryRequest(BaseModel):
+    patient: dict[str, Any]
+    policy: dict[str, Any]
+
+
 class StepDebug(BaseModel):
     step: str
     resolved_url: str | None = None
@@ -22,5 +27,10 @@ class WorkflowRunResponse(BaseModel):
 
 
 class PolicyWorkflowRunResponse(BaseModel):
+    summary: str
     data: dict[str, Any]
     steps_debug: list[StepDebug]
+
+
+class ContextSummaryResponse(BaseModel):
+    summary: str
