@@ -48,7 +48,7 @@ def _run_migrations():
 
 def _seed_summary_prompts():
     default_prompts: dict[str, str] = {
-        "/summarize-context": (
+        "summarize-context": (
             "Create a concise medical insurance context summary from the provided patient and policy data. "
             "Highlight patient identity details, admission/treatment context if present, policy coverage/restrictions, "
             "and any important gaps or missing fields.\\n\\n"
@@ -79,7 +79,7 @@ def _seed_summary_prompts():
 async def lifespan(app: FastAPI):
     Base.metadata.create_all(bind=engine)
     _run_migrations()
-    _seed_summary_prompts()
+    #_seed_summary_prompts()
     start_email_scheduler()
     yield
     stop_email_scheduler()

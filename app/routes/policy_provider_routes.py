@@ -59,11 +59,12 @@ def delete_provider(
     return policy_provider_config_controller.delete_provider(db, provider_id)
 
 
+@router.post("/run-policy/{provider_id}", response_model=PolicyWorkflowRunResponse)
 @router.post("/run-policy/{provider_id}/{policy_id}", response_model=PolicyWorkflowRunResponse)
 async def run_policy_workflow(
     provider_id: str,
-    policy_id: str,
     request: Request,
+    policy_id: str | None = None,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
@@ -83,10 +84,11 @@ async def run_policy_workflow(
         file_bytes = await uploaded_file.read()
 
     provider = policy_provider_config_controller.get_provider_by_provider_id(db, provider_id)
+    input_data = {"policy_id": policy_id} if policy_id else {}
     return await execute_policy_workflow_with_summary(
         db,
         provider.config,
-        {"policy_id": policy_id},
+        input_data,
         file_name=file_name,
         file_content_type=file_content_type,
         file_bytes=file_bytes,

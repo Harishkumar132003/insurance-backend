@@ -212,24 +212,42 @@ async def execute_policy_workflow_with_summary(
     file_content_type: str | None = None,
     file_bytes: bytes | None = None,
 ) -> dict[str, Any]:
-    """Execute provider workflow and summarize the mapped output via OpenAI."""
-    result = await execute_workflow_from_config(config, input_data)
+    """Execute provider workflow (when policy_id is present) and summarize via OpenAI."""
+    policy_id = input_data.get("policy_id")
+    if policy_id:
+        result = await execute_workflow_from_config(config, input_data)
+        response_data = result["data"]
+        steps_debug = result["steps_debug"]
+    else:
+        response_data = {}
+        steps_debug = []
+
     file_text = _extract_file_text(file_bytes, file_name, file_content_type)
 
-    policy_key = "policy-summary"
-    default_prompt = (
-        "Summarize this policy workflow response in plain language. "
-        "Keep it concise and include key policy details, approval/rejection indicators, "
-        "and notable amounts or dates if present.\n\n"
-        "Response JSON:\n{response_json}\n\n"
-        "Attached file context:\n{file_context}"
-    )
+    if policy_id:
+        policy_key = "policy-summary"
+        default_prompt = (
+            "Summarize this policy workflow response in plain language. "
+            "Keep it concise and include key policy details, approval/rejection indicators, "
+            "and notable amounts or dates if present.\n\n"
+            "Response JSON:\n{response_json}\n\n"
+            "Attached file context:\n{file_context}"
+        )
+    else:
+        policy_key = "policy-summary-file-only"
+        default_prompt = (
+            "Summarize the attached policy document context in plain language. "
+            "Keep it concise and include important coverage details, restrictions, waiting periods, "
+            "and notable amounts or dates if present.\n\n"
+            "Attached file context:\n{file_context}"
+        )
+
     prompt_template = _get_summary_prompt_text(db, policy_key, default_prompt)
     prompt = (
         prompt_template
         .replace(
             "{response_json}",
-            json.dumps(result["data"], ensure_ascii=False, default=str, indent=2),
+            json.dumps(response_data, ensure_ascii=False, default=str, indent=2),
         )
         .replace("{file_context}", file_text or "No file context provided")
     )
@@ -237,8 +255,8 @@ async def execute_policy_workflow_with_summary(
     summary = await summarize_with_openai(prompt)
     return {
         "summary": summary,
-        "data": result["data"],
-        "steps_debug": result["steps_debug"],
+        "data": response_data,
+        "steps_debug": steps_debug,
     }
 
 
