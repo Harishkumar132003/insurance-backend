@@ -21,7 +21,7 @@ from app.utils.file_storage import save_attachment
 
 logger = logging.getLogger(__name__)
 
-VALID_STATUSES = {"APPROVED", "REJECTED", "QUERY", "ADR", "UNKNOWN"}
+VALID_STATUSES = {"APPROVED", "PARTIALLY_APPROVED", "DENIED", "ADR_NMI", "UNKNOWN"}
 
 OPENAI_PROMPT = """
 You are an expert in Indian health insurance claim processing.
@@ -35,18 +35,18 @@ Return STRICT JSON:
 {{
   "claim_number": "string or null",
   "uhid": "string or null",
-  "status": "APPROVED | REJECTED | QUERY | ADR | UNKNOWN",
-  "approved_amount": "number or null — extract the approved/sanctioned amount if status is APPROVED",
+  "status": "APPROVED | PARTIALLY_APPROVED | DENIED | ADR_NMI | UNKNOWN",
+  "approved_amount": "number or null — extract the approved/sanctioned amount if status is APPROVED or PARTIALLY_APPROVED",
   "summary": "1-2 line summary",
-  "query_details": "if QUERY/ADR, describe what is being asked or what documents are needed. null otherwise",
-  "documents_requested": "if ADR, list the specific documents requested as comma-separated string. null otherwise"
+  "query_details": "if ADR_NMI, describe what is being asked or what documents are needed. null otherwise",
+  "documents_requested": "if ADR_NMI and specific documents are listed, provide a comma-separated string. null otherwise"
 }}
 
 ---
 
 IMPORTANT RULES (VERY STRICT):
 
-1. APPROVED if ANY of these appear:
+1. APPROVED if the full claimed / requested amount is sanctioned and ANY of these appear:
    - "cashless authorization"
    - "authorization letter"
    - "approved amount"
@@ -55,27 +55,28 @@ IMPORTANT RULES (VERY STRICT):
    - "authorization granted"
    - "extension approved"
    - "final approval"
-   - If approval + deductions present → STILL APPROVED
 
-2. REJECTED if:
+2. PARTIALLY_APPROVED if approval is granted but the sanctioned / approved amount is
+   clearly LESS than the claimed / requested amount (e.g. claim for 2000, approved 1500).
+   Common phrasing: "partially approved", "approved in part", "sanctioned amount" lower
+   than the claim, explicit deductions reducing the payable amount.
+
+3. DENIED if:
    - "rejected"
    - "denied"
    - "not payable"
    - "claim not admissible"
 
-3. ADR (Additional Document Request) if:
+4. ADR_NMI (Additional Document Request / Need More Info / query) if:
    - "additional documents required"
    - "please submit documents"
    - "documents required"
    - "need bills/reports"
-   - Asked/sanctioned amount differs from provided/claimed amount (e.g. user asked for 2000 but provided 1000)
-   - Any request for extra documents or additional information
-
-4. QUERY if:
    - "clarification required"
    - "please clarify"
    - "query"
    - "discrepancy"
+   - Any request for extra documents, additional information, or clarification.
 
 5. If unsure → UNKNOWN
 
@@ -159,7 +160,7 @@ def _process_single_email(db: Session, email_data: dict):
     if thread_id:
         claim_case = (
             db.query(ClaimCase)
-            .filter(ClaimCase.thread_id == thread_id, ClaimCase.status == "APPLIED")
+            .filter(ClaimCase.thread_id == thread_id, ClaimCase.status.in_(AWAITING_PROVIDER_STATUSES))
             .first()
         )
         if claim_case:
@@ -188,7 +189,7 @@ def _process_single_email(db: Session, email_data: dict):
     if not claim_case:
         claim_case = _match_claim_case(db, uhid, claim_number, from_email)
     if not claim_case:
-        logger.info(f"No matching APPLIED claim case found for email: {subject}")
+        logger.info(f"No awaiting-provider claim case found for email: {subject}")
         return
 
     # 4. Persist the received email with AI suggestions (no direct status update)
@@ -242,7 +243,7 @@ def _match_claim_case(
     if uhid:
         claim_case = (
             db.query(ClaimCase)
-            .filter(ClaimCase.uhid == uhid, ClaimCase.status == "APPLIED")
+            .filter(ClaimCase.uhid == uhid, ClaimCase.status.in_(AWAITING_PROVIDER_STATUSES))
             .first()
         )
         if claim_case:
@@ -253,7 +254,7 @@ def _match_claim_case(
     if claim_number:
         claim_case = (
             db.query(ClaimCase)
-            .filter(ClaimCase.claim_number == claim_number, ClaimCase.status == "APPLIED")
+            .filter(ClaimCase.claim_number == claim_number, ClaimCase.status.in_(AWAITING_PROVIDER_STATUSES))
             .first()
         )
         if claim_case:
@@ -277,7 +278,7 @@ def _match_claim_case(
         db.query(ClaimCase)
         .filter(
             ClaimCase.policy_provider_id == provider.id,
-            ClaimCase.status == "APPLIED",
+            ClaimCase.status.in_(AWAITING_PROVIDER_STATUSES),
         )
         .all()
     )
@@ -287,7 +288,7 @@ def _match_claim_case(
         return claim_cases[0]
     elif len(claim_cases) > 1:
         logger.warning(
-            f"Multiple APPLIED claim cases for provider {provider.name} ({clean_email}). "
+            f"Multiple awaiting-provider claim cases for provider {provider.name} ({clean_email}). "
             f"Skipping to avoid wrong update."
         )
         return None
@@ -420,11 +421,14 @@ def _parse_email_date(date_str: str):
 
 
 STATUS_TO_EMAIL_TYPE = {
-    "QUERY": "QUERY_RAISED",
-    "ADR": "ADR",
     "APPROVED": "APPROVAL",
-    "REJECTED": "REJECTION",
+    "PARTIALLY_APPROVED": "PARTIAL_APPROVAL",
+    "DENIED": "DENIAL",
+    "ADR_NMI": "ADR_NMI",
 }
+
+# Claims that are waiting on a provider response (so inbound emails can match).
+AWAITING_PROVIDER_STATUSES = ("SUBMITTED", "ENHANCE_SUBMITTED", "RECONSIDER", "ADR_SUBMITTED")
 
 
 def _persist_email_record(

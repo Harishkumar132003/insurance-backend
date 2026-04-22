@@ -78,7 +78,7 @@ def update_extracted_data(
 def get_claim_case_emails(
     claim_case_id: UUID,
     direction: str | None = Query(default=None, description="Filter by SENT or RECEIVED"),
-    email_type: str | None = Query(default=None, description="Filter by email type: QUERY_RAISED, QUERY_RESPONSE, APPROVAL, REJECTION, ADR"),
+    email_type: str | None = Query(default=None, description="Filter by email type: SUBMITTED, ENHANCE_SUBMITTED, RECONSIDER, ADR_SUBMITTED, APPROVAL, PARTIAL_APPROVAL, DENIAL, ADR_NMI"),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):

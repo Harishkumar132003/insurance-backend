@@ -29,6 +29,7 @@ from app.routes.claim_case_routes import router as claim_case_router
 from app.routes.mock_routes import router as mock_router
 from app.routes.cc_email_routes import router as cc_email_router
 from app.routes.summary_prompt_template_routes import router as summary_prompt_template_router
+from app.routes.feature_routes import router as feature_router
 from app.models.summary_prompt_template import SummaryPromptTemplate
 from sqlalchemy.orm import Session
 
@@ -56,10 +57,55 @@ def _seed_summary_prompts():
             "Policy JSON:\\n{policy_json}"
         ),
         "policy-summary": (
-            "Summarize this policy workflow response in plain language. "
-            "Keep it concise and include key policy details, approval/rejection indicators, and notable amounts or dates.\\n\\n"
-            "Response JSON:\\n{response_json}\\n\\n"
-            "Attached file context:\\n{file_context}"
+            "You are reviewing an Indian health-insurance policy.\n\n"
+            "Produce ONE JSON object with three fields: `summary`, `chronic_conditions`, `cost_estimates`.\n\n"
+            "1. `summary` — a concise plain-language summary of the policy. Include the "
+            "sum insured, key coverage details, waiting periods, major exclusions, "
+            "approval / rejection indicators, and any notable amounts or dates.\n\n"
+            "2. `chronic_conditions` — for EACH listed condition, return a SHORT SENTENCE "
+            "(string) describing how this policy treats the condition. Mention whether it is "
+            "covered, any waiting period, sub-limits, co-pay, or whether it is explicitly excluded. "
+            "If the document is silent, say so and note whether Pre-Existing Diseases are covered "
+            "in general. Never return null or a boolean.\n\n"
+            "   Fields (use snake_case, return all of them as strings):\n"
+            "     diabetes, heart_disease, hypertension, hyperlipidemia, osteoarthritis, "
+            "asthma_copd, cancer, alcohol_drug_abuse, hiv_std\n\n"
+            "   `other` — a short free-text description of any ADDITIONAL chronic condition "
+            "the policy explicitly mentions (e.g. \"Chronic kidney disease — 24 month waiting "
+            "period\"), or null if none.\n\n"
+            "3. `cost_estimates` — expected or sub-limit amounts the policy specifies for each "
+            "cost head. Return a short string (e.g. \"₹5,000 per day\", \"1% of sum insured\", "
+            "\"No sub-limit\"). Use null if the document does not mention the head.\n\n"
+            "   Fields (all required, string or null):\n"
+            "     room_rent, investigation_cost, icu_charges, ot_charges, professional_fees, "
+            "medicines_cost, other_expenses, package_charges, total_cost\n\n"
+            "Workflow response JSON:\n{response_json}\n\n"
+            "Attached policy document:\n{file_context}"
+        ),
+        "policy-summary-file-only": (
+            "You are reviewing an Indian health-insurance policy document.\n\n"
+            "Produce ONE JSON object with three fields: `summary`, `chronic_conditions`, `cost_estimates`.\n\n"
+            "1. `summary` — a concise plain-language summary of the policy covering the "
+            "sum insured, coverage details, waiting periods, major exclusions, and any "
+            "notable amounts or dates.\n\n"
+            "2. `chronic_conditions` — for EACH listed condition, return a SHORT SENTENCE "
+            "(string) describing how this policy treats the condition. Mention whether it is "
+            "covered, any waiting period, sub-limits, co-pay, or whether it is explicitly excluded. "
+            "If the document is silent, say so and note whether Pre-Existing Diseases are covered "
+            "in general. Never return null or a boolean.\n\n"
+            "   Fields (use snake_case, return all of them as strings):\n"
+            "     diabetes, heart_disease, hypertension, hyperlipidemia, osteoarthritis, "
+            "asthma_copd, cancer, alcohol_drug_abuse, hiv_std\n\n"
+            "   `other` — a short free-text description of any ADDITIONAL chronic condition "
+            "the policy explicitly mentions (e.g. \"Chronic kidney disease — 24 month waiting "
+            "period\"), or null if none.\n\n"
+            "3. `cost_estimates` — expected or sub-limit amounts the policy specifies for each "
+            "cost head. Return a short string (e.g. \"₹5,000 per day\", \"1% of sum insured\", "
+            "\"No sub-limit\"). Use null if the document does not mention the head.\n\n"
+            "   Fields (all required, string or null):\n"
+            "     room_rent, investigation_cost, icu_charges, ot_charges, professional_fees, "
+            "medicines_cost, other_expenses, package_charges, total_cost\n\n"
+            "Attached policy document:\n{file_context}"
         ),
     }
 
@@ -110,6 +156,7 @@ app.include_router(claim_case_router, prefix="/api/v1")
 app.include_router(mock_router, prefix="/api/v1")
 app.include_router(cc_email_router, prefix="/api/v1")
 app.include_router(summary_prompt_template_router, prefix="/api/v1")
+app.include_router(feature_router, prefix="/api/v1")
 
 
 @app.get("/health")

@@ -64,6 +64,15 @@ class QueryLogItem(BaseModel):
     model_config = {"from_attributes": True}
 
 
+class ClaimCaseSummary(BaseModel):
+    patient_name: str | None = None
+    uhid: str | None = None
+    provider_name: str | None = None
+    diagnosis: str | None = None
+    icd_10: str | None = None
+    requested_amount: float | None = None
+
+
 class ClaimCaseDetailResponse(BaseModel):
     id: UUID
     uhid: str
@@ -77,6 +86,7 @@ class ClaimCaseDetailResponse(BaseModel):
     approved_amount: float | None = None
     created_at: datetime
     updated_at: datetime | None = None
+    summary: ClaimCaseSummary | None = None
     form_data: list[FormDataItem] = []
     status_history: list[StatusHistoryItem] = []
     query_logs: list[QueryLogItem] = []
@@ -130,6 +140,7 @@ class ClaimCaseSubmitFormResponse(BaseModel):
 
 class ClaimListItem(BaseModel):
     claim_case_id: UUID
+    uhid: str | None = None
     patient_name: str | None = None
     claim_number: str | None = None
     claim_status: str | None = None

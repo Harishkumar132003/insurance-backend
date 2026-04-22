@@ -1,6 +1,9 @@
+from uuid import UUID
+
 from fastapi import HTTPException, status
 from sqlalchemy.orm import Session
 
+from app.core.features import validate_access
 from app.core.security import hash_password
 from app.models.user import User
 from app.models.hospital import Hospital
@@ -16,12 +19,28 @@ def get_all_users(db: Session, hospital_id: str | None, current_user: User):
     return query.all()
 
 
-def create_user(db: Session, payload: UserCreate):
+def create_user(db: Session, payload: UserCreate, current_user: User):
     if payload.role not in ("SUPER_ADMIN", "HOSPITAL_ADMIN"):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Role must be SUPER_ADMIN or HOSPITAL_ADMIN",
         )
+
+    # HOSPITAL_ADMIN creators can only create HOSPITAL_ADMINs inside their own hospital.
+    if current_user.role == "HOSPITAL_ADMIN":
+        if payload.role == "SUPER_ADMIN":
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="HOSPITAL_ADMIN cannot create SUPER_ADMIN users",
+            )
+        if payload.hospital_id is not None and payload.hospital_id != current_user.hospital_id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Cannot create users for another hospital",
+            )
+        # Ignore any mismatched / missing hospital_id — force to the admin's hospital.
+        payload.hospital_id = current_user.hospital_id
+
     if payload.role == "HOSPITAL_ADMIN" and payload.hospital_id is None:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -45,8 +64,35 @@ def create_user(db: Session, payload: UserCreate):
         hashed_password=hash_password(payload.password),
         role=payload.role,
         hospital_id=payload.hospital_id,
+        access=validate_access(db, payload.access) if payload.access is not None else None,
     )
     db.add(user)
+    db.commit()
+    db.refresh(user)
+    return user
+
+
+def update_user_access(
+    db: Session,
+    user_id: UUID,
+    access: list[str] | None,
+    current_user: User,
+) -> User:
+    user = db.query(User).filter(User.id == user_id).first()
+    if not user:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="User not found"
+        )
+
+    # A HOSPITAL_ADMIN can only manage users inside their own hospital.
+    if current_user.role == "HOSPITAL_ADMIN":
+        if user.hospital_id != current_user.hospital_id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Cannot manage users from other hospitals",
+            )
+
+    user.access = None if access is None else validate_access(db, access)
     db.commit()
     db.refresh(user)
     return user

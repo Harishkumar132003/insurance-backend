@@ -69,6 +69,7 @@ def get_all_claims(
 
         result.append({
             "claim_case_id": cc.id,
+            "uhid": cc.uhid,
             "patient_name": patient_name,
             "claim_number": cc.claim_number if cc.claim_number and cc.claim_number != "null" else None,
             "claim_status": cc.current_stage,
@@ -81,6 +82,24 @@ def get_all_claims(
         })
 
     return result
+
+
+def _find_first_value(obj, keys: set[str]):
+    """Recursively find first non-empty value matching any key in `keys` (case-insensitive)."""
+    if isinstance(obj, dict):
+        for k, v in obj.items():
+            if isinstance(k, str) and k.lower() in keys and v not in (None, "", [], {}):
+                return v
+        for v in obj.values():
+            found = _find_first_value(v, keys)
+            if found is not None:
+                return found
+    elif isinstance(obj, list):
+        for item in obj:
+            found = _find_first_value(item, keys)
+            if found is not None:
+                return found
+    return None
 
 
 def get_claim_case(db: Session, claim_case_id) -> ClaimCase:
@@ -107,10 +126,55 @@ def get_claim_case(db: Session, claim_case_id) -> ClaimCase:
     cc_emails = cc_query.filter(sa.or_(*filters)).all()
     claim_case.cc_emails = [cc.email for cc in cc_emails]
 
+    # Build summary from the latest form_data (key names vary across templates,
+    # so search the JSON recursively for the first matching field).
+    latest_form = (
+        db.query(FormData)
+        .filter(FormData.claim_case_id == claim_case.id)
+        .order_by(FormData.created_at.desc())
+        .first()
+    )
+    data = latest_form.data_json if latest_form and latest_form.data_json else {}
+    requested_amount = _find_first_value(
+        data,
+        {"requested_amount", "total_cost", "total_amount", "claim_amount", "estimated_amount"},
+    )
+    try:
+        requested_amount = float(requested_amount) if requested_amount is not None else None
+    except (TypeError, ValueError):
+        requested_amount = None
+
+    claim_case.summary = {
+        "patient_name": _find_first_value(data, {"patient_name", "name"}),
+        "uhid": claim_case.uhid,
+        "provider_name": provider.name if provider else None,
+        "diagnosis": _find_first_value(
+            data,
+            {"provisional_diagnosis", "diagnosis", "final_diagnosis"},
+        ),
+        "icd_10": _find_first_value(
+            data,
+            {"icd10_code", "icd_10_code", "icd_10", "icd10", "icd"},
+        ),
+        "requested_amount": requested_amount,
+    }
+
     return claim_case
 
 
-VALID_STATUSES = {"DRAFT", "APPLIED", "QUERY", "APPROVED", "REJECTED", "ADR", "UNKNOWN"}
+# Workflow states on ClaimCase.status
+AWAITING_PROVIDER_STATUSES = {"SUBMITTED", "ENHANCE_SUBMITTED", "RECONSIDER", "ADR_SUBMITTED"}
+OUTCOME_STATUSES = {"APPROVED", "PARTIALLY_APPROVED", "DENIED", "ADR_NMI"}
+VALID_STATUSES = {"DRAFT"} | AWAITING_PROVIDER_STATUSES | OUTCOME_STATUSES | {"UNKNOWN"}
+
+# Map the current outcome to the workflow state we move into when the hospital
+# sends a reply (query / docs) back to the provider. See claim-flow diagram.
+QUERY_RAISE_STATE = {
+    "APPROVED": "ENHANCE_SUBMITTED",
+    "PARTIALLY_APPROVED": "ENHANCE_SUBMITTED",
+    "DENIED": "RECONSIDER",
+    "ADR_NMI": "ADR_SUBMITTED",
+}
 
 
 def update_claim_case_status(
@@ -142,12 +206,12 @@ def update_claim_case_status(
     return claim_case
 
 
-VALID_CLAIM_STATUSES = {"APPROVED", "REJECTED", "QUERY", "ADR", "UNKNOWN"}
+VALID_CLAIM_STATUSES = OUTCOME_STATUSES | {"UNKNOWN"}
 STATUS_TO_EMAIL_TYPE = {
-    "QUERY": "QUERY_RAISED",
-    "ADR": "ADR",
     "APPROVED": "APPROVAL",
-    "REJECTED": "REJECTION",
+    "PARTIALLY_APPROVED": "PARTIAL_APPROVAL",
+    "DENIED": "DENIAL",
+    "ADR_NMI": "ADR_NMI",
 }
 
 
@@ -200,8 +264,8 @@ def update_extracted_data(
         if payload.email_type is None and new_claim_status in STATUS_TO_EMAIL_TYPE:
             email_record.email_type = STATUS_TO_EMAIL_TYPE[new_claim_status]
 
-        # Resolve open query logs on APPROVED/REJECTED
-        if new_claim_status in ("APPROVED", "REJECTED"):
+        # Resolve open query logs on a terminal outcome (approved/partial/denied)
+        if new_claim_status in ("APPROVED", "PARTIALLY_APPROVED", "DENIED"):
             open_queries = (
                 db.query(QueryLog)
                 .filter(QueryLog.claim_case_id == claim_case.id, QueryLog.status == "OPEN")

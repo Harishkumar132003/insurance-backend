@@ -11,7 +11,7 @@ from sqlalchemy.orm import Session
 from app.models.hospital_config import HospitalConfig
 from app.models.hospital_prompt import HospitalPrompt
 from app.models.summary_prompt_template import SummaryPromptTemplate
-from app.services.openai_service import summarize_with_openai
+from app.services.openai_service import summarize_with_openai, summarize_policy_with_openai
 from app.utils.template import render_template, extract_fields
 
 
@@ -223,6 +223,13 @@ async def execute_policy_workflow_with_summary(
         steps_debug = []
 
     file_text = _extract_file_text(file_bytes, file_name, file_content_type)
+    print(
+        f"[POLICY] file_name={file_name!r} content_type={file_content_type!r} "
+        f"raw_bytes={len(file_bytes) if file_bytes else 0} "
+        f"extracted_chars={len(file_text)}"
+    )
+    if file_text:
+        print(f"[POLICY] file_text preview: {file_text[:400]!r}")
 
     if policy_id:
         policy_key = "policy-summary"
@@ -252,11 +259,13 @@ async def execute_policy_workflow_with_summary(
         .replace("{file_context}", file_text or "No file context provided")
     )
 
-    summary = await summarize_with_openai(prompt)
+    structured = await summarize_policy_with_openai(prompt)
     return {
-        "summary": summary,
+        "summary": structured.get("summary", ""),
         "data": response_data,
         "steps_debug": steps_debug,
+        "chronic_conditions": structured.get("chronic_conditions"),
+        "cost_estimates": structured.get("cost_estimates"),
     }
 
 

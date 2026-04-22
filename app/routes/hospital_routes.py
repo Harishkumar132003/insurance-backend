@@ -1,8 +1,8 @@
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 
 from app.db.session import get_db
-from app.core.deps import get_current_user, require_super_admin
+from app.core.deps import get_current_user, require_hospital_admin, require_super_admin
 from app.models.user import User
 from uuid import UUID
 
@@ -29,11 +29,30 @@ def create_hospital(
     return hospital_controller.create_hospital(db, payload)
 
 
+@router.get("/{hospital_id}", response_model=HospitalResponse)
+def get_hospital(
+    hospital_id: UUID,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    if current_user.role == "HOSPITAL_ADMIN" and current_user.hospital_id != hospital_id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Cannot access another hospital",
+        )
+    return hospital_controller.get_hospital(db, hospital_id)
+
+
 @router.put("/{hospital_id}", response_model=HospitalResponse)
 def update_hospital(
     hospital_id: UUID,
     payload: HospitalUpdate,
     db: Session = Depends(get_db),
-    current_user: User = Depends(require_super_admin),
+    current_user: User = Depends(require_hospital_admin),
 ):
+    if current_user.role == "HOSPITAL_ADMIN" and current_user.hospital_id != hospital_id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Cannot update another hospital",
+        )
     return hospital_controller.update_hospital(db, hospital_id, payload)

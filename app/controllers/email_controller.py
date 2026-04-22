@@ -4,15 +4,38 @@ from datetime import datetime, timezone
 from fastapi import HTTPException, status
 from sqlalchemy.orm import Session
 
-from app.core.config import settings
+from app.core.secrets import decrypt_hospital_password
 from app.models.claim_case import ClaimCase
 from app.models.claim_case_document import ClaimCaseDocument
 from app.models.claim_case_email import ClaimCaseEmail
 from app.models.claim_case_email_attachment import ClaimCaseEmailAttachment
+from app.models.hospital import Hospital
 from app.models.policy_provider_config import PolicyProviderConfig
 from app.models.status_history import StatusHistory
+from app.controllers.claim_case_controller import QUERY_RAISE_STATE
 from app.services.email_service import send_email, fetch_inbox
 from app.utils.file_storage import save_attachment, read_file
+
+
+def _resolve_hospital_credentials(db: Session, claim_case: ClaimCase) -> tuple[str, str]:
+    """Return (email, plaintext_app_password) for the claim case's hospital."""
+    if not claim_case.hospital_id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Claim case has no hospital assigned",
+        )
+    hospital = db.query(Hospital).filter(Hospital.id == claim_case.hospital_id).first()
+    if not hospital:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Hospital not found"
+        )
+    if not hospital.email or not hospital.app_password:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Hospital email or app_password is not configured",
+        )
+    password = decrypt_hospital_password(hospital.app_password, hospital.rohini_id or "")
+    return hospital.email, password
 
 
 def send_form_email(
@@ -54,8 +77,11 @@ def send_form_email(
             doc.content_type or "application/octet-stream",
         ))
 
-    # 4. Send email with all attachments and CC
+    # 4. Send email from the hospital's own mailbox
+    from_email, from_password = _resolve_hospital_credentials(db, claim_case)
     send_email(
+        from_email=from_email,
+        from_password=from_password,
         to_email=to_email,
         subject=subject,
         body=content,
@@ -63,12 +89,12 @@ def send_form_email(
         cc_emails=cc_emails or None,
     )
 
-    # 5. Update claim_case status to APPLIED
-    claim_case.status = "APPLIED"
+    # 5. Update claim_case status to SUBMITTED (initial entry into provider review)
+    claim_case.status = "SUBMITTED"
     db.add(StatusHistory(
         claim_case_id=claim_case.id,
         stage="PRE_AUTH",
-        status="APPLIED",
+        status="SUBMITTED",
         remarks=f"Email sent to {to_email}",
     ))
 
@@ -76,12 +102,12 @@ def send_form_email(
     email_record = ClaimCaseEmail(
         claim_case_id=claim_case.id,
         direction="SENT",
-        from_email=settings.EMAIL_ADDRESS,
+        from_email=from_email,
         to_email=to_email,
         subject=subject,
         body=content,
         thread_id=claim_case.thread_id,
-        email_type="APPLIED",
+        email_type="SUBMITTED",
         email_date=datetime.now(timezone.utc),
         is_read=True,
     )
@@ -155,7 +181,10 @@ def send_query_email(
             doc.content_type or "application/octet-stream",
         ))
 
+    from_email, from_password = _resolve_hospital_credentials(db, claim_case)
     send_email(
+        from_email=from_email,
+        from_password=from_password,
         to_email=to_email,
         subject=subject,
         body=content,
@@ -163,22 +192,37 @@ def send_query_email(
         cc_emails=cc_emails or None,
     )
 
+    # Transition the workflow state based on the current outcome:
+    #   APPROVED / PARTIALLY_APPROVED -> ENHANCE_SUBMITTED
+    #   DENIED                        -> RECONSIDER
+    #   ADR_NMI                       -> ADR_SUBMITTED
+    next_state = QUERY_RAISE_STATE.get(claim_case.claim_status)
+    if not next_state:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=(
+                f"Cannot raise query from claim_status '{claim_case.claim_status}'. "
+                f"Must be one of: {', '.join(sorted(QUERY_RAISE_STATE))}"
+            ),
+        )
+    claim_case.status = next_state
+
     db.add(StatusHistory(
         claim_case_id=claim_case.id,
         stage=claim_case.current_stage,
-        status="QUERY_RAISED",
+        status=next_state,
         remarks=f"Query email sent to {to_email}",
     ))
 
     email_record = ClaimCaseEmail(
         claim_case_id=claim_case.id,
         direction="SENT",
-        from_email=settings.EMAIL_ADDRESS,
+        from_email=from_email,
         to_email=to_email,
         subject=subject,
         body=content,
         thread_id=claim_case.thread_id,
-        email_type="QUERY_RAISED",
+        email_type=next_state,
         email_date=datetime.now(timezone.utc),
         is_read=True,
     )

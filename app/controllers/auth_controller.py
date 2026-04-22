@@ -1,6 +1,7 @@
 from fastapi import HTTPException, status
 from sqlalchemy.orm import Session
 
+from app.core.features import resolve_access
 from app.core.security import verify_password, create_access_token
 from app.models.user import User
 from app.schemas.auth import LoginRequest
@@ -18,7 +19,11 @@ def login(db: Session, payload: LoginRequest):
         "role": user.role,
         "hospital_id": str(user.hospital_id) if user.hospital_id else None,
     })
-    response = {"access_token": access_token, "token_type": "bearer"}
+    response = {
+        "access_token": access_token,
+        "token_type": "bearer",
+        "access": resolve_access(db, user.access),
+    }
     if user.role == "HOSPITAL_ADMIN" and user.hospital:
         response["hospital"] = {
             "id": str(user.hospital.id),

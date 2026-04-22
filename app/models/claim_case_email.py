@@ -16,7 +16,7 @@ class ClaimCaseEmail(Base):
     subject = Column(String, nullable=True)
     body = Column(Text, nullable=True)
     message_id = Column(String, unique=True, nullable=True)
-    email_type = Column(String, nullable=True)  # QUERY_RAISED, QUERY_RESPONSE, APPROVAL, REJECTION, ADR
+    email_type = Column(String, nullable=True)  # SUBMITTED, ENHANCE_SUBMITTED, RECONSIDER, ADR_SUBMITTED, APPROVAL, PARTIAL_APPROVAL, DENIAL, ADR_NMI
     thread_id = Column(String, nullable=True)
     email_date = Column(DateTime(timezone=True), nullable=True)
 

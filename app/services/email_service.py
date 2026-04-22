@@ -12,26 +12,30 @@ from app.core.config import settings
 
 
 def send_email(
+    from_email: str,
+    from_password: str,
     to_email: str,
     subject: str,
     body: str,
     attachments: list[tuple[bytes, str, str]] | None = None,
     cc_emails: list[str] | None = None,
 ) -> None:
-    """Send an email with optional attachments and CC recipients.
+    """Send an email via the sender's own Gmail SMTP credentials.
 
     Args:
-        attachments: List of (file_bytes, filename, content_type) tuples.
-        cc_emails: List of CC email addresses.
+        from_email:    The sender's email address (e.g. the hospital's mailbox).
+        from_password: Plaintext Gmail app password for `from_email`.
+        attachments:   List of (file_bytes, filename, content_type) tuples.
+        cc_emails:     List of CC email addresses.
     """
-    if not settings.EMAIL_ADDRESS or not settings.EMAIL_APP_PASSWORD:
+    if not from_email or not from_password:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Email credentials not configured",
+            detail="Sender email credentials are missing",
         )
 
     msg = MIMEMultipart("mixed")
-    msg["From"] = settings.EMAIL_ADDRESS
+    msg["From"] = from_email
     msg["To"] = to_email
     if cc_emails:
         msg["Cc"] = ", ".join(cc_emails)
@@ -51,8 +55,8 @@ def send_email(
 
     try:
         with smtplib.SMTP_SSL("smtp.gmail.com", 465) as server:
-            server.login(settings.EMAIL_ADDRESS, settings.EMAIL_APP_PASSWORD)
-            server.sendmail(settings.EMAIL_ADDRESS, recipients, msg.as_string())
+            server.login(from_email, from_password)
+            server.sendmail(from_email, recipients, msg.as_string())
     except smtplib.SMTPException as e:
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,

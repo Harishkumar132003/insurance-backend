@@ -280,17 +280,22 @@ def validate_email_suggestion(
                 status_code=status.HTTP_404_NOT_FOUND, detail="Claim case not found"
             )
 
-        # Apply AI suggestion to claim case
+        # Apply AI suggestion to claim case. The provider's reply moves the
+        # workflow back into the matching outcome state in the flow diagram.
         claim_case.claim_status = email.ai_suggested_status
+        claim_case.status = email.ai_suggested_status
 
         if email.ai_suggested_claim_number and not claim_case.claim_number:
             claim_case.claim_number = email.ai_suggested_claim_number
 
-        if email.ai_suggested_status == "APPROVED" and email.ai_suggested_amount is not None:
+        if (
+            email.ai_suggested_status in ("APPROVED", "PARTIALLY_APPROVED")
+            and email.ai_suggested_amount is not None
+        ):
             claim_case.approved_amount = float(email.ai_suggested_amount)
 
-        # Create QueryLog for QUERY/ADR
-        if email.ai_suggested_status in ("QUERY", "ADR"):
+        # Create QueryLog when provider asks for docs / clarification
+        if email.ai_suggested_status == "ADR_NMI":
             db.add(QueryLog(
                 claim_case_id=claim_case.id,
                 query_type=email.ai_suggested_status,
@@ -299,8 +304,8 @@ def validate_email_suggestion(
                 status="OPEN",
             ))
 
-        # Resolve open QueryLogs for APPROVED/REJECTED
-        if email.ai_suggested_status in ("APPROVED", "REJECTED"):
+        # Resolve open QueryLogs on a terminal outcome
+        if email.ai_suggested_status in ("APPROVED", "PARTIALLY_APPROVED", "DENIED"):
             open_queries = (
                 db.query(QueryLog)
                 .filter(QueryLog.claim_case_id == claim_case.id, QueryLog.status == "OPEN")

@@ -15,6 +15,7 @@ class Hospital(Base):
     address = Column(String, nullable=True)
     rohini_id = Column(String, nullable=True)
     email = Column(String, nullable=True)
+    app_password = Column(String, nullable=True)  # encrypted Fernet token; never stored plaintext
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
 

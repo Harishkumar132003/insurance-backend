@@ -9,6 +9,7 @@ class HospitalCreate(BaseModel):
     address: str | None = None
     rohini_id: str | None = None
     email: str | None = None
+    app_password: str | None = None  # plaintext in; encrypted before storage
 
 
 class HospitalUpdate(BaseModel):
@@ -16,6 +17,7 @@ class HospitalUpdate(BaseModel):
     address: str | None = None
     rohini_id: str | None = None
     email: str | None = None
+    app_password: str | None = None  # plaintext in; "" clears the stored value
 
 
 class HospitalResponse(BaseModel):
@@ -24,6 +26,7 @@ class HospitalResponse(BaseModel):
     address: str | None = None
     rohini_id: str | None = None
     email: str | None = None
+    has_app_password: bool = False  # populated by controller; ciphertext itself is never returned
     created_at: datetime
     updated_at: datetime | None
 

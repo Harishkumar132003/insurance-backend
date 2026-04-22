@@ -22,3 +22,4 @@ class TokenResponse(BaseModel):
     access_token: str
     token_type: str = "bearer"
     hospital: HospitalDetail | None = None
+    access: list[str] | None = None  # effective feature keys for this user
