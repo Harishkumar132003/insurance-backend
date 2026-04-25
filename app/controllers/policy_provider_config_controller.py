@@ -21,6 +21,7 @@ def create_provider(db: Session, payload: PolicyProviderCreate):
         tpa_name=payload.tpa_name,
         tpa_toll_free_phone=payload.tpa_toll_free_phone,
         tpa_toll_free_fax=payload.tpa_toll_free_fax,
+        is_onboarded=payload.is_onboarded,
         config=config_data,
     )
     db.add(provider)
@@ -59,6 +60,8 @@ def update_provider(db: Session, provider_id: UUID, payload: PolicyProviderUpdat
         provider.tpa_toll_free_phone = payload.tpa_toll_free_phone
     if payload.tpa_toll_free_fax is not None:
         provider.tpa_toll_free_fax = payload.tpa_toll_free_fax
+    if payload.is_onboarded is not None:
+        provider.is_onboarded = payload.is_onboarded
     config = provider.config.copy()
     if payload.auth is not None:
         config["auth"] = payload.auth.model_dump()

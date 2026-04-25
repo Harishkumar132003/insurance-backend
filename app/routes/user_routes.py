@@ -16,10 +16,11 @@ router = APIRouter(prefix="/users", tags=["Users"])
 @router.get("", response_model=list[UserResponse])
 def list_users(
     hospital_id: str | None = None,
+    role: str | None = None,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    return user_controller.get_all_users(db, hospital_id, current_user)
+    return user_controller.get_all_users(db, hospital_id, current_user, role=role)
 
 
 @router.post("", response_model=UserResponse, status_code=201)

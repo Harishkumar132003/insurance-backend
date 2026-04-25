@@ -56,6 +56,13 @@ def send_form_email(
             detail="Claim case not found",
         )
 
+    provider = (
+        db.query(PolicyProviderConfig)
+        .filter(PolicyProviderConfig.id == claim_case.policy_provider_id)
+        .first()
+    )
+    is_onboarded = bool(provider and provider.is_onboarded)
+
     # 2. Generate thread_id if not exists and append to subject
     if not claim_case.thread_id:
         claim_case.thread_id = uuid.uuid4().hex[:12]
@@ -77,17 +84,27 @@ def send_form_email(
             doc.content_type or "application/octet-stream",
         ))
 
-    # 4. Send email from the hospital's own mailbox
-    from_email, from_password = _resolve_hospital_credentials(db, claim_case)
-    send_email(
-        from_email=from_email,
-        from_password=from_password,
-        to_email=to_email,
-        subject=subject,
-        body=content,
-        attachments=attachments or None,
-        cc_emails=cc_emails or None,
-    )
+    # 4. Send email from the hospital's own mailbox, or skip SMTP for onboarded
+    # providers who will review the claim inside OASYS.
+    if is_onboarded:
+        hospital = (
+            db.query(Hospital)
+            .filter(Hospital.id == claim_case.hospital_id)
+            .first()
+            if claim_case.hospital_id else None
+        )
+        from_email = hospital.email if hospital and hospital.email else "onboarded@oasys.local"
+    else:
+        from_email, from_password = _resolve_hospital_credentials(db, claim_case)
+        send_email(
+            from_email=from_email,
+            from_password=from_password,
+            to_email=to_email,
+            subject=subject,
+            body=content,
+            attachments=attachments or None,
+            cc_emails=cc_emails or None,
+        )
 
     # 5. Update claim_case status to SUBMITTED (initial entry into provider review)
     claim_case.status = "SUBMITTED"
@@ -95,7 +112,11 @@ def send_form_email(
         claim_case_id=claim_case.id,
         stage="PRE_AUTH",
         status="SUBMITTED",
-        remarks=f"Email sent to {to_email}",
+        remarks=(
+            "Submitted to onboarded provider"
+            if is_onboarded
+            else f"Email sent to {to_email}"
+        ),
     ))
 
     # 6. Persist the sent email record
@@ -110,6 +131,7 @@ def send_form_email(
         email_type="SUBMITTED",
         email_date=datetime.now(timezone.utc),
         is_read=True,
+        provider_read=not is_onboarded,
     )
     db.add(email_record)
     db.flush()
@@ -163,6 +185,13 @@ def send_query_email(
             detail="Claim case does not have a thread_id. Send an initial email first.",
         )
 
+    provider = (
+        db.query(PolicyProviderConfig)
+        .filter(PolicyProviderConfig.id == claim_case.policy_provider_id)
+        .first()
+    )
+    is_onboarded = bool(provider and provider.is_onboarded)
+
     subject = f"{subject} [{claim_case.thread_id}]"
 
     # Build attachments list: optional PDF + uploaded documents
@@ -181,16 +210,25 @@ def send_query_email(
             doc.content_type or "application/octet-stream",
         ))
 
-    from_email, from_password = _resolve_hospital_credentials(db, claim_case)
-    send_email(
-        from_email=from_email,
-        from_password=from_password,
-        to_email=to_email,
-        subject=subject,
-        body=content,
-        attachments=attachments or None,
-        cc_emails=cc_emails or None,
-    )
+    if is_onboarded:
+        hospital = (
+            db.query(Hospital)
+            .filter(Hospital.id == claim_case.hospital_id)
+            .first()
+            if claim_case.hospital_id else None
+        )
+        from_email = hospital.email if hospital and hospital.email else "onboarded@oasys.local"
+    else:
+        from_email, from_password = _resolve_hospital_credentials(db, claim_case)
+        send_email(
+            from_email=from_email,
+            from_password=from_password,
+            to_email=to_email,
+            subject=subject,
+            body=content,
+            attachments=attachments or None,
+            cc_emails=cc_emails or None,
+        )
 
     # Transition the workflow state based on the current outcome:
     #   APPROVED / PARTIALLY_APPROVED -> ENHANCE_SUBMITTED
@@ -211,7 +249,11 @@ def send_query_email(
         claim_case_id=claim_case.id,
         stage=claim_case.current_stage,
         status=next_state,
-        remarks=f"Query email sent to {to_email}",
+        remarks=(
+            "Query submitted to onboarded provider"
+            if is_onboarded
+            else f"Query email sent to {to_email}"
+        ),
     ))
 
     email_record = ClaimCaseEmail(
@@ -225,6 +267,7 @@ def send_query_email(
         email_type=next_state,
         email_date=datetime.now(timezone.utc),
         is_read=True,
+        provider_read=not is_onboarded,
     )
     db.add(email_record)
     db.flush()

@@ -22,6 +22,9 @@ class ClaimCaseEmail(Base):
 
     # AI suggestion & validation fields
     is_read = Column(Boolean, nullable=False, default=False, server_default="false")
+    # Read state for the in-app insurance-provider user. Always true for
+    # external (non-onboarded) providers — there is no in-app reader to track.
+    provider_read = Column(Boolean, nullable=False, default=True, server_default="true")
     ai_suggested_status = Column(String, nullable=True)
     ai_suggested_amount = Column(Numeric(12, 2), nullable=True)
     ai_suggested_claim_number = Column(String, nullable=True)

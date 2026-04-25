@@ -20,8 +20,14 @@ def get_all_claims(
     hospital_id: UUID | None,
     exclude_draft: bool = False,
     provider_id: UUID | None = None,
+    policy_provider_id: UUID | None = None,
 ) -> list[dict]:
-    query = db.query(ClaimCase).filter(ClaimCase.hospital_id == hospital_id)
+    query = db.query(ClaimCase)
+    if policy_provider_id is not None:
+        # INSURANCE_PROVIDER user: scope by their provider across all hospitals.
+        query = query.filter(ClaimCase.policy_provider_id == policy_provider_id)
+    else:
+        query = query.filter(ClaimCase.hospital_id == hospital_id)
 
     if exclude_draft:
         query = query.filter(ClaimCase.status != "DRAFT")
@@ -102,12 +108,21 @@ def _find_first_value(obj, keys: set[str]):
     return None
 
 
-def get_claim_case(db: Session, claim_case_id) -> ClaimCase:
+def get_claim_case(db: Session, claim_case_id, current_user=None) -> ClaimCase:
     claim_case = db.query(ClaimCase).filter(ClaimCase.id == claim_case_id).first()
     if not claim_case:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Claim case not found",
+        )
+    if (
+        current_user is not None
+        and current_user.role == "INSURANCE_PROVIDER"
+        and claim_case.policy_provider_id != current_user.policy_provider_id
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Not allowed to access this claim case",
         )
     claim_case.unread_count = sum(1 for e in claim_case.emails if not e.is_read)
 
@@ -116,6 +131,7 @@ def get_claim_case(db: Session, claim_case_id) -> ClaimCase:
         PolicyProviderConfig.id == claim_case.policy_provider_id
     ).first()
     claim_case.policy_provider_email = provider.email if provider else None
+    claim_case.is_onboarded = bool(provider and provider.is_onboarded)
 
     # Fetch CC emails matching this hospital and/or provider
     cc_query = db.query(CcEmail)

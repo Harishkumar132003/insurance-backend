@@ -94,6 +94,7 @@ class ClaimCaseDetailResponse(BaseModel):
     documents: list[ClaimCaseDocumentResponse] = []
     unread_count: int = 0
     policy_provider_email: str | None = None
+    is_onboarded: bool = False
     cc_emails: list[str] = []
 
     model_config = {"from_attributes": True}
@@ -152,3 +153,32 @@ class ClaimListItem(BaseModel):
     created_at: datetime
 
     model_config = {"from_attributes": True}
+
+
+class ProviderQueueItem(BaseModel):
+    claim_case_id: UUID
+    uhid: str | None = None
+    patient_name: str | None = None
+    claim_number: str | None = None
+    hospital_id: UUID | None = None
+    hospital_name: str | None = None
+    amount: float | None = None
+    status: str
+    created_at: datetime
+
+
+class PaginatedProviderQueueResponse(BaseModel):
+    items: list[ProviderQueueItem]
+    total: int
+    page: int
+    page_size: int
+    total_pages: int
+
+
+class ProviderActionRequest(BaseModel):
+    status: str  # APPROVED, PARTIALLY_APPROVED, DENIED, ADR_NMI
+    approved_amount: float | None = None
+    claim_number: str | None = None
+    remarks: str | None = None
+    query_details: str | None = None
+    documents_requested: str | None = None

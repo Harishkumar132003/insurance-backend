@@ -25,6 +25,7 @@ class ClaimCaseEmailResponse(BaseModel):
     body: str | None = None
     email_date: datetime | None = None
     is_read: bool = False
+    provider_read: bool = True
     ai_suggested_status: str | None = None
     ai_suggested_amount: float | None = None
     ai_suggested_claim_number: str | None = None
@@ -46,6 +47,7 @@ class ClaimCaseEmailListResponse(BaseModel):
     subject: str | None = None
     email_date: datetime | None = None
     is_read: bool = False
+    provider_read: bool = True
     ai_suggested_status: str | None = None
     validation_status: str = "PENDING"
     created_at: datetime
@@ -58,6 +60,7 @@ class AllClaimCaseEmailListItem(BaseModel):
     id: int
     claim_case_id: UUID
     claim_number: str | None = None
+    is_onboard_claim: bool = False
     direction: str
     email_type: str | None = None
     from_email: str
@@ -65,6 +68,7 @@ class AllClaimCaseEmailListItem(BaseModel):
     subject: str | None = None
     email_date: datetime | None = None
     is_read: bool = False
+    provider_read: bool = True
     ai_suggested_status: str | None = None
     validation_status: str = "PENDING"
     is_latest: bool = False

@@ -5,9 +5,17 @@ from fastapi import APIRouter, Depends, File, Query, UploadFile
 from sqlalchemy.orm import Session
 
 from app.db.session import get_db
-from app.core.deps import get_current_user
+from app.core.deps import get_current_user, require_insurance_provider
 from app.models.user import User
-from app.schemas.claim_case import ClaimCaseResponse, ClaimCaseDetailResponse, ClaimCaseStatusUpdate, ClaimCaseExtractedDataUpdate, ClaimListItem
+from app.schemas.claim_case import (
+    ClaimCaseResponse,
+    ClaimCaseDetailResponse,
+    ClaimCaseStatusUpdate,
+    ClaimCaseExtractedDataUpdate,
+    ClaimListItem,
+    PaginatedProviderQueueResponse,
+    ProviderActionRequest,
+)
 from app.schemas.claim_case_document import ClaimCaseDocumentResponse
 from app.schemas.claim_case_email import ClaimCaseEmailResponse, ClaimCaseEmailListResponse, PaginatedEmailListResponse, ClaimCaseEmailValidateRequest
 from app.controllers import claim_case_controller, claim_case_email_controller, claim_case_document_controller
@@ -22,8 +30,55 @@ def get_all_claims(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
+    policy_provider_id = (
+        current_user.policy_provider_id
+        if current_user.role == "INSURANCE_PROVIDER"
+        else None
+    )
     return claim_case_controller.get_all_claims(
-        db, current_user.hospital_id, exclude_draft=exclude_draft, provider_id=provider_id
+        db,
+        current_user.hospital_id,
+        exclude_draft=exclude_draft,
+        provider_id=provider_id,
+        policy_provider_id=policy_provider_id,
+    )
+
+
+@router.get("/provider-queue", response_model=PaginatedProviderQueueResponse)
+def get_provider_queue(
+    page: int = Query(default=1, ge=1, description="Page number"),
+    page_size: int = Query(default=20, ge=1, le=100, description="Items per page"),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_insurance_provider),
+):
+    if not current_user.policy_provider_id:
+        from fastapi import HTTPException, status as _status
+        raise HTTPException(
+            status_code=_status.HTTP_400_BAD_REQUEST,
+            detail="User is not linked to a policy provider",
+        )
+    return claim_case_email_controller.get_provider_queue(
+        db, current_user.policy_provider_id, page=page, page_size=page_size
+    )
+
+
+@router.patch("/{claim_case_id}/provider-action", response_model=ClaimCaseResponse)
+def provider_action(
+    claim_case_id: UUID,
+    payload: ProviderActionRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_insurance_provider),
+):
+    return claim_case_email_controller.process_by_provider(
+        db,
+        claim_case_id,
+        current_user,
+        new_status=payload.status,
+        approved_amount=payload.approved_amount,
+        claim_number=payload.claim_number,
+        remarks=payload.remarks,
+        query_details=payload.query_details,
+        documents_requested=payload.documents_requested,
     )
 
 
@@ -35,8 +90,18 @@ def get_all_claim_case_emails(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
+    policy_provider_id = (
+        current_user.policy_provider_id
+        if current_user.role == "INSURANCE_PROVIDER"
+        else None
+    )
     return claim_case_email_controller.get_all_claim_case_emails(
-        db, current_user.hospital_id, page=page, page_size=page_size, claim_case_id=claim_case_id
+        db,
+        current_user.hospital_id,
+        page=page,
+        page_size=page_size,
+        claim_case_id=claim_case_id,
+        policy_provider_id=policy_provider_id,
     )
 
 
@@ -46,7 +111,7 @@ def get_claim_case(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    return claim_case_controller.get_claim_case(db, claim_case_id)
+    return claim_case_controller.get_claim_case(db, claim_case_id, current_user=current_user)
 
 
 @router.patch("/{claim_case_id}/status", response_model=ClaimCaseResponse)
@@ -112,7 +177,9 @@ def mark_email_as_read(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    return claim_case_email_controller.mark_email_as_read(db, claim_case_id, email_id)
+    return claim_case_email_controller.mark_email_as_read(
+        db, claim_case_id, email_id, current_user=current_user
+    )
 
 
 @router.patch("/{claim_case_id}/emails/{email_id}/validate", response_model=ClaimCaseEmailResponse)

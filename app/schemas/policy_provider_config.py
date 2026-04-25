@@ -14,6 +14,7 @@ class PolicyProviderCreate(BaseModel):
     tpa_name: str | None = None
     tpa_toll_free_phone: str | None = None
     tpa_toll_free_fax: str | None = None
+    is_onboarded: bool = False
     auth: AuthConfig | None = None
     steps: list[StepConfig]
     required_fields: list[str] = []
@@ -25,6 +26,7 @@ class PolicyProviderUpdate(BaseModel):
     tpa_name: str | None = None
     tpa_toll_free_phone: str | None = None
     tpa_toll_free_fax: str | None = None
+    is_onboarded: bool | None = None
     auth: AuthConfig | None = None
     steps: list[StepConfig] | None = None
     required_fields: list[str] | None = None
@@ -38,6 +40,7 @@ class PolicyProviderResponse(BaseModel):
     tpa_name: str | None = None
     tpa_toll_free_phone: str | None = None
     tpa_toll_free_fax: str | None = None
+    is_onboarded: bool = False
     config: dict[str, Any]
     created_at: datetime
     updated_at: datetime | None

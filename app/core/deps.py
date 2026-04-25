@@ -50,3 +50,12 @@ def require_hospital_admin(current_user: User = Depends(get_current_user)) -> Us
             detail="Hospital admin access required",
         )
     return current_user
+
+
+def require_insurance_provider(current_user: User = Depends(get_current_user)) -> User:
+    if current_user.role not in ("SUPER_ADMIN", "INSURANCE_PROVIDER"):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Insurance provider access required",
+        )
+    return current_user

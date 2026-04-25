@@ -1,6 +1,6 @@
 import uuid
 
-from sqlalchemy import Column, String, DateTime, func
+from sqlalchemy import Boolean, Column, String, DateTime, func
 from sqlalchemy.dialects.postgresql import UUID, JSONB
 
 from app.db.base import Base
@@ -17,5 +17,8 @@ class PolicyProviderConfig(Base):
     tpa_toll_free_phone = Column(String, nullable=True)
     tpa_toll_free_fax = Column(String, nullable=True)
     config = Column(JSONB, nullable=False)
+    # When true, the provider reviews claims inside OASYS via an
+    # INSURANCE_PROVIDER user instead of receiving email submissions.
+    is_onboarded = Column(Boolean, nullable=False, default=False, server_default="false")
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())

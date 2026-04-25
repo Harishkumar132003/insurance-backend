@@ -9,26 +9,46 @@ from sqlalchemy.orm import Session, joinedload
 from app.models.claim_case import ClaimCase
 from app.models.claim_case_email import ClaimCaseEmail
 from app.models.claim_case_email_attachment import ClaimCaseEmailAttachment
+from app.models.form_data import FormData
+from app.models.hospital import Hospital
+from app.models.policy_provider_config import PolicyProviderConfig
 from app.models.query_log import QueryLog
 from app.models.status_history import StatusHistory
 from app.utils.file_storage import get_attachment_full_path
 
 
-def get_all_claim_case_emails(db: Session, hospital_id, page: int = 1, page_size: int = 20, claim_case_id=None) -> dict:
+def get_all_claim_case_emails(
+    db: Session,
+    hospital_id,
+    page: int = 1,
+    page_size: int = 20,
+    claim_case_id=None,
+    policy_provider_id=None,
+) -> dict:
+    # Scope: by policy_provider_id (INSURANCE_PROVIDER user) or by hospital_id.
+    if policy_provider_id is not None:
+        scope_filter = ClaimCase.policy_provider_id == policy_provider_id
+    else:
+        scope_filter = ClaimCase.hospital_id == hospital_id
+
     # Subquery: latest email id per claim_case
     latest_subq_query = (
         db.query(func.max(ClaimCaseEmail.id).label("max_id"))
         .join(ClaimCase, ClaimCaseEmail.claim_case_id == ClaimCase.id)
-        .filter(ClaimCase.hospital_id == hospital_id)
+        .filter(scope_filter)
     )
     if claim_case_id:
         latest_subq_query = latest_subq_query.filter(ClaimCaseEmail.claim_case_id == claim_case_id)
     latest_subq = latest_subq_query.group_by(ClaimCaseEmail.claim_case_id).subquery()
 
     base_query = (
-        db.query(ClaimCaseEmail, ClaimCase.claim_number)
+        db.query(ClaimCaseEmail, ClaimCase.claim_number, PolicyProviderConfig.is_onboarded)
         .join(ClaimCase, ClaimCaseEmail.claim_case_id == ClaimCase.id)
-        .filter(ClaimCase.hospital_id == hospital_id)
+        .outerjoin(
+            PolicyProviderConfig,
+            PolicyProviderConfig.id == ClaimCase.policy_provider_id,
+        )
+        .filter(scope_filter)
     )
     if claim_case_id:
         base_query = base_query.filter(ClaimCaseEmail.claim_case_id == claim_case_id)
@@ -50,11 +70,12 @@ def get_all_claim_case_emails(db: Session, hospital_id, page: int = 1, page_size
     latest_ids = {row.max_id for row in db.query(latest_subq.c.max_id).all()}
 
     items = []
-    for email, claim_number in rows:
+    for email, claim_number, is_onboarded in rows:
         items.append({
             "id": email.id,
             "claim_case_id": email.claim_case_id,
             "claim_number": claim_number,
+            "is_onboard_claim": bool(is_onboarded),
             "direction": email.direction,
             "email_type": email.email_type,
             "from_email": email.from_email,
@@ -62,6 +83,7 @@ def get_all_claim_case_emails(db: Session, hospital_id, page: int = 1, page_size
             "subject": email.subject,
             "email_date": email.email_date,
             "is_read": email.is_read,
+            "provider_read": email.provider_read,
             "ai_suggested_status": email.ai_suggested_status,
             "validation_status": email.validation_status,
             "is_latest": email.id in latest_ids,
@@ -116,6 +138,7 @@ def get_emails_for_claim_case(
             "subject": e.subject,
             "email_date": e.email_date,
             "is_read": e.is_read,
+            "provider_read": e.provider_read,
             "ai_suggested_status": e.ai_suggested_status,
             "validation_status": e.validation_status,
             "created_at": e.created_at,
@@ -206,7 +229,7 @@ def view_attachment(
     )
 
 
-def mark_email_as_read(db: Session, claim_case_id, email_id: int):
+def mark_email_as_read(db: Session, claim_case_id, email_id: int, current_user=None):
     email = (
         db.query(ClaimCaseEmail)
         .options(joinedload(ClaimCaseEmail.attachments))
@@ -221,7 +244,16 @@ def mark_email_as_read(db: Session, claim_case_id, email_id: int):
             status_code=status.HTTP_404_NOT_FOUND, detail="Email not found"
         )
 
-    email.is_read = True
+    if current_user is not None and current_user.role == "INSURANCE_PROVIDER":
+        claim_case = db.query(ClaimCase).filter(ClaimCase.id == claim_case_id).first()
+        if not claim_case or claim_case.policy_provider_id != current_user.policy_provider_id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Not allowed to access this claim case",
+            )
+        email.provider_read = True
+    else:
+        email.is_read = True
     db.commit()
     db.refresh(email)
     return email
@@ -328,3 +360,189 @@ def validate_email_suggestion(
     db.commit()
     db.refresh(email)
     return email
+
+
+def get_provider_queue(
+    db: Session, policy_provider_id, page: int = 1, page_size: int = 20
+) -> dict:
+    from app.controllers.claim_case_controller import AWAITING_PROVIDER_STATUSES
+
+    base_query = db.query(ClaimCase).filter(
+        ClaimCase.policy_provider_id == policy_provider_id,
+        ClaimCase.status.in_(list(AWAITING_PROVIDER_STATUSES)),
+    )
+    total = base_query.count()
+    total_pages = math.ceil(total / page_size) if total > 0 else 1
+    offset = (page - 1) * page_size
+
+    rows = (
+        base_query.order_by(ClaimCase.created_at.desc())
+        .offset(offset)
+        .limit(page_size)
+        .all()
+    )
+
+    hospital_ids = {r.hospital_id for r in rows if r.hospital_id}
+    hospitals = {}
+    if hospital_ids:
+        for h in db.query(Hospital).filter(Hospital.id.in_(hospital_ids)).all():
+            hospitals[h.id] = h.name
+
+    items = []
+    for cc in rows:
+        patient_name = None
+        amount = None
+        form_data = (
+            db.query(FormData)
+            .filter(FormData.claim_case_id == cc.id)
+            .order_by(FormData.created_at.desc())
+            .first()
+        )
+        if form_data and form_data.data_json:
+            patient_insured = form_data.data_json.get("patient_insured", {}) or {}
+            patient_name = patient_insured.get("patient_name")
+            hospitalization = form_data.data_json.get("hospitalization", {}) or {}
+            costs = hospitalization.get("costs", {}) or {}
+            amount = costs.get("total_cost")
+
+        items.append({
+            "claim_case_id": cc.id,
+            "uhid": cc.uhid,
+            "patient_name": patient_name,
+            "claim_number": cc.claim_number if cc.claim_number and cc.claim_number != "null" else None,
+            "hospital_id": cc.hospital_id,
+            "hospital_name": hospitals.get(cc.hospital_id),
+            "amount": float(amount) if amount is not None else None,
+            "status": cc.status,
+            "created_at": cc.created_at,
+        })
+
+    return {
+        "items": items,
+        "total": total,
+        "page": page,
+        "page_size": page_size,
+        "total_pages": total_pages,
+    }
+
+
+_PROVIDER_ACTION_STATUSES = {"APPROVED", "PARTIALLY_APPROVED", "DENIED", "ADR_NMI"}
+
+
+def process_by_provider(
+    db: Session,
+    claim_case_id,
+    current_user,
+    new_status: str,
+    approved_amount: float | None,
+    claim_number: str | None,
+    remarks: str | None,
+    query_details: str | None,
+    documents_requested: str | None,
+):
+    from app.controllers.claim_case_controller import (
+        AWAITING_PROVIDER_STATUSES,
+        STATUS_TO_EMAIL_TYPE,
+    )
+
+    if new_status not in _PROVIDER_ACTION_STATUSES:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"status must be one of {sorted(_PROVIDER_ACTION_STATUSES)}",
+        )
+
+    claim_case = db.query(ClaimCase).filter(ClaimCase.id == claim_case_id).first()
+    if not claim_case:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Claim case not found",
+        )
+
+    if claim_case.policy_provider_id != current_user.policy_provider_id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Not allowed to act on this claim case",
+        )
+
+    if claim_case.status not in AWAITING_PROVIDER_STATUSES:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Claim case is not awaiting provider action (status={claim_case.status})",
+        )
+
+    provider = (
+        db.query(PolicyProviderConfig)
+        .filter(PolicyProviderConfig.id == claim_case.policy_provider_id)
+        .first()
+    )
+    hospital = (
+        db.query(Hospital).filter(Hospital.id == claim_case.hospital_id).first()
+        if claim_case.hospital_id else None
+    )
+
+    claim_case.claim_status = new_status
+    claim_case.status = new_status
+
+    if claim_number and not claim_case.claim_number:
+        claim_case.claim_number = claim_number
+
+    if new_status in ("APPROVED", "PARTIALLY_APPROVED") and approved_amount is not None:
+        claim_case.approved_amount = float(approved_amount)
+
+    if new_status == "ADR_NMI":
+        db.add(QueryLog(
+            claim_case_id=claim_case.id,
+            query_type=new_status,
+            query_details=query_details or remarks,
+            documents_requested=documents_requested,
+            status="OPEN",
+        ))
+
+    if new_status in ("APPROVED", "PARTIALLY_APPROVED", "DENIED"):
+        open_queries = (
+            db.query(QueryLog)
+            .filter(QueryLog.claim_case_id == claim_case.id, QueryLog.status == "OPEN")
+            .all()
+        )
+        for q in open_queries:
+            q.status = "RESOLVED"
+            q.resolved_at = datetime.now(timezone.utc)
+
+    db.add(StatusHistory(
+        claim_case_id=claim_case.id,
+        stage=claim_case.current_stage,
+        status=new_status,
+        remarks=remarks or query_details or "Processed by insurance provider",
+        changed_by="PROVIDER_ACTION",
+        updated_by=current_user.id,
+    ))
+
+    # Synthetic RECEIVED email so the existing timeline renders this action
+    # the same way as an AI-extracted reply from an external provider.
+    synthetic_email = ClaimCaseEmail(
+        claim_case_id=claim_case.id,
+        direction="RECEIVED",
+        from_email=(provider.email if provider and provider.email else "provider@oasys.local"),
+        to_email=(hospital.email if hospital and hospital.email else "hospital@oasys.local"),
+        subject=f"Provider decision [{claim_case.thread_id or ''}]".strip(),
+        body=remarks or query_details,
+        thread_id=claim_case.thread_id,
+        email_type=STATUS_TO_EMAIL_TYPE.get(new_status),
+        email_date=datetime.now(timezone.utc),
+        is_read=False,
+        provider_read=True,
+        ai_suggested_status=new_status,
+        ai_suggested_amount=approved_amount,
+        ai_suggested_claim_number=claim_number,
+        ai_summary=remarks,
+        ai_query_details=query_details,
+        ai_documents_requested=documents_requested,
+        validation_status="APPROVED",
+        validated_at=datetime.now(timezone.utc),
+        validated_by=current_user.id,
+    )
+    db.add(synthetic_email)
+
+    db.commit()
+    db.refresh(claim_case)
+    return claim_case

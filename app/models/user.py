@@ -13,8 +13,13 @@ class User(Base):
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     email = Column(String, unique=True, index=True, nullable=False)
     hashed_password = Column(String, nullable=False)
-    role = Column(String, nullable=False)  # SUPER_ADMIN or HOSPITAL_ADMIN
+    role = Column(String, nullable=False)  # SUPER_ADMIN, HOSPITAL_ADMIN, or INSURANCE_PROVIDER
     hospital_id = Column(UUID(as_uuid=True), ForeignKey("hospitals.id"), nullable=True)
+    policy_provider_id = Column(
+        UUID(as_uuid=True),
+        ForeignKey("policy_provider_configs.id"),
+        nullable=True,
+    )
     # NULL  -> full access (all features in app.core.features.FEATURE_KEYS)
     # []    -> no tabs
     # [...] -> only the listed feature keys
@@ -23,3 +28,4 @@ class User(Base):
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
 
     hospital = relationship("Hospital", back_populates="users")
+    policy_provider = relationship("PolicyProviderConfig")

@@ -18,6 +18,7 @@ def login(db: Session, payload: LoginRequest):
         "sub": str(user.id),
         "role": user.role,
         "hospital_id": str(user.hospital_id) if user.hospital_id else None,
+        "policy_provider_id": str(user.policy_provider_id) if user.policy_provider_id else None,
     })
     response = {
         "access_token": access_token,
@@ -31,5 +32,12 @@ def login(db: Session, payload: LoginRequest):
             "address": user.hospital.address,
             "rohini_id": user.hospital.rohini_id,
             "email": user.hospital.email,
+        }
+    if user.role == "INSURANCE_PROVIDER" and user.policy_provider:
+        response["provider"] = {
+            "id": str(user.policy_provider.id),
+            "provider_id": user.policy_provider.provider_id,
+            "name": user.policy_provider.name,
+            "email": user.policy_provider.email,
         }
     return response
