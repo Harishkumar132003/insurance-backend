@@ -333,6 +333,7 @@ def validate_email_suggestion(
                 query_type=email.ai_suggested_status,
                 query_details=email.ai_query_details or email.ai_summary,
                 documents_requested=email.ai_documents_requested,
+                documents_list=email.ai_documents_list,
                 status="OPEN",
             ))
 
@@ -439,6 +440,7 @@ def process_by_provider(
     remarks: str | None,
     query_details: str | None,
     documents_requested: str | None,
+    documents_list: list[str] | None = None,
 ):
     from app.controllers.claim_case_controller import (
         AWAITING_PROVIDER_STATUSES,
@@ -490,13 +492,20 @@ def process_by_provider(
         claim_case.approved_amount = float(approved_amount)
 
     if new_status == "ADR_NMI":
+        if documents_list is None:
+            from app.services.document_extraction_service import extract_documents
+            source = " ".join(filter(None, [documents_requested, query_details, remarks]))
+            documents_list = extract_documents(source)
         db.add(QueryLog(
             claim_case_id=claim_case.id,
             query_type=new_status,
             query_details=query_details or remarks,
             documents_requested=documents_requested,
+            documents_list=documents_list,
             status="OPEN",
         ))
+    else:
+        documents_list = None
 
     if new_status in ("APPROVED", "PARTIALLY_APPROVED", "DENIED"):
         open_queries = (
@@ -537,6 +546,7 @@ def process_by_provider(
         ai_summary=remarks,
         ai_query_details=query_details,
         ai_documents_requested=documents_requested,
+        ai_documents_list=documents_list,
         validation_status="APPROVED",
         validated_at=datetime.now(timezone.utc),
         validated_by=current_user.id,

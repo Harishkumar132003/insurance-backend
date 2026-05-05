@@ -39,7 +39,8 @@ Return STRICT JSON:
   "approved_amount": "number or null — extract the approved/sanctioned amount if status is APPROVED or PARTIALLY_APPROVED",
   "summary": "1-2 line summary",
   "query_details": "if ADR_NMI, describe what is being asked or what documents are needed. null otherwise",
-  "documents_requested": "if ADR_NMI and specific documents are listed, provide a comma-separated string. null otherwise"
+  "documents_requested": "if ADR_NMI and specific documents are listed, provide a comma-separated string. null otherwise",
+  "documents_list": ["array of canonical document names being requested. e.g. [\"Discharge Summary\", \"Final Bill\"]. empty array if none."]
 }}
 
 ---
@@ -179,6 +180,9 @@ def _process_single_email(db: Session, email_data: dict):
     summary = result.get("summary", "")
     query_details = result.get("query_details")
     documents_requested = result.get("documents_requested")
+    documents_list = result.get("documents_list")
+    if documents_list is not None and not isinstance(documents_list, list):
+        documents_list = None
 
     logger.info(f"OpenAI extracted: uhid={uhid}, claim_number={claim_number}, status={extracted_status}")
 
@@ -200,6 +204,7 @@ def _process_single_email(db: Session, email_data: dict):
         ai_summary=summary,
         ai_query_details=query_details,
         ai_documents_requested=documents_requested,
+        ai_documents_list=documents_list,
     )
 
     db.commit()
@@ -436,6 +441,7 @@ def _persist_email_record(
     extracted_status: str | None = None, ai_suggested_amount=None,
     ai_suggested_claim_number: str | None = None, ai_summary: str | None = None,
     ai_query_details: str | None = None, ai_documents_requested: str | None = None,
+    ai_documents_list: list[str] | None = None,
 ):
     """Persist a received email and its attachments with AI suggestions to the database."""
     message_id = email_data.get("message_id", "")
@@ -468,6 +474,7 @@ def _persist_email_record(
         ai_summary=ai_summary,
         ai_query_details=ai_query_details,
         ai_documents_requested=ai_documents_requested,
+        ai_documents_list=ai_documents_list,
         validation_status="PENDING",
     )
     db.add(email_record)

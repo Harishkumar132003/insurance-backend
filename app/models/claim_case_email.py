@@ -1,5 +1,5 @@
 from sqlalchemy import Column, BigInteger, Boolean, String, Text, DateTime, ForeignKey, Index, Numeric, func
-from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import relationship
 
 from app.db.base import Base
@@ -31,6 +31,8 @@ class ClaimCaseEmail(Base):
     ai_summary = Column(Text, nullable=True)
     ai_query_details = Column(Text, nullable=True)
     ai_documents_requested = Column(Text, nullable=True)
+    # Structured list (AI-extracted) of document names requested by the provider.
+    ai_documents_list = Column(JSONB, nullable=True)
     validation_status = Column(String, nullable=False, default="PENDING", server_default="PENDING")
     validated_at = Column(DateTime(timezone=True), nullable=True)
     validated_by = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=True)

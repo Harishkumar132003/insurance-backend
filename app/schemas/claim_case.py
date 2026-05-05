@@ -57,6 +57,7 @@ class QueryLogItem(BaseModel):
     query_type: str
     query_details: str | None = None
     documents_requested: str | None = None
+    documents_list: list[str] | None = None
     status: str
     resolved_at: datetime | None = None
     created_at: datetime
@@ -182,3 +183,4 @@ class ProviderActionRequest(BaseModel):
     remarks: str | None = None
     query_details: str | None = None
     documents_requested: str | None = None
+    documents_list: list[str] | None = None

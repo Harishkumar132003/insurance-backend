@@ -79,6 +79,7 @@ def provider_action(
         remarks=payload.remarks,
         query_details=payload.query_details,
         documents_requested=payload.documents_requested,
+        documents_list=payload.documents_list,
     )
 
 
