@@ -1,8 +1,11 @@
+import logging
 import uuid
 from datetime import datetime, timezone
 
 from fastapi import HTTPException, status
 from sqlalchemy.orm import Session
+
+logger = logging.getLogger(__name__)
 
 from app.core.secrets import decrypt_hospital_password
 from app.models.claim_case import ClaimCase
@@ -77,7 +80,14 @@ def send_form_email(
         ClaimCaseDocument.claim_case_id == claim_case_id
     ).all()
     for doc in documents:
-        file_bytes = read_file(doc.file_path)
+        try:
+            file_bytes = read_file(doc.file_path)
+        except FileNotFoundError:
+            logger.warning(
+                "Skipping missing attachment for claim_case=%s doc_id=%s path=%s",
+                claim_case_id, doc.id, doc.file_path,
+            )
+            continue
         attachments.append((
             file_bytes,
             doc.original_filename,
@@ -203,7 +213,14 @@ def send_query_email(
         ClaimCaseDocument.claim_case_id == claim_case_id
     ).all()
     for doc in documents:
-        file_bytes = read_file(doc.file_path)
+        try:
+            file_bytes = read_file(doc.file_path)
+        except FileNotFoundError:
+            logger.warning(
+                "Skipping missing attachment for claim_case=%s doc_id=%s path=%s",
+                claim_case_id, doc.id, doc.file_path,
+            )
+            continue
         attachments.append((
             file_bytes,
             doc.original_filename,
