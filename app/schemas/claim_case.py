@@ -74,6 +74,16 @@ class ClaimCaseSummary(BaseModel):
     requested_amount: float | None = None
 
 
+class ClaimCaseHeaderInfo(BaseModel):
+    tpa_name: str | None = None
+    tpa_toll_free_phone: str | None = None
+    tpa_toll_free_fax: str | None = None
+    hospital_name: str | None = None
+    hospital_address: str | None = None
+    hospital_rohini_id: str | None = None
+    hospital_email: str | None = None
+
+
 class ClaimCaseDetailResponse(BaseModel):
     id: UUID
     uhid: str
@@ -88,6 +98,7 @@ class ClaimCaseDetailResponse(BaseModel):
     created_at: datetime
     updated_at: datetime | None = None
     summary: ClaimCaseSummary | None = None
+    header_info: ClaimCaseHeaderInfo | None = None
     form_data: list[FormDataItem] = []
     status_history: list[StatusHistoryItem] = []
     query_logs: list[QueryLogItem] = []
@@ -151,6 +162,7 @@ class ClaimListItem(BaseModel):
     amount: float | None = None
     approved_amount: float | None = None
     status: str | None = None
+    workflow_status: str | None = None
     created_at: datetime
 
     model_config = {"from_attributes": True}

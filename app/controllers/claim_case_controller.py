@@ -83,7 +83,8 @@ def get_all_claims(
             "provider_id": provider_id_str,
             "amount": amount,
             "approved_amount": float(cc.approved_amount) if cc.approved_amount is not None else None,
-            "status": cc.claim_status,
+            "status": cc.claim_status or cc.status,
+            "workflow_status": cc.status,
             "created_at": cc.created_at,
         })
 
@@ -132,6 +133,23 @@ def get_claim_case(db: Session, claim_case_id, current_user=None) -> ClaimCase:
     ).first()
     claim_case.policy_provider_email = provider.email if provider else None
     claim_case.is_onboarded = bool(provider and provider.is_onboarded)
+
+    # Fetch hospital (for the form-header block)
+    from app.models.hospital import Hospital
+    hospital = (
+        db.query(Hospital).filter(Hospital.id == claim_case.hospital_id).first()
+        if claim_case.hospital_id else None
+    )
+
+    claim_case.header_info = {
+        "tpa_name": (provider.tpa_name if provider and provider.tpa_name else (provider.name if provider else None)),
+        "tpa_toll_free_phone": provider.tpa_toll_free_phone if provider else None,
+        "tpa_toll_free_fax": provider.tpa_toll_free_fax if provider else None,
+        "hospital_name": hospital.name if hospital else None,
+        "hospital_address": hospital.address if hospital else None,
+        "hospital_rohini_id": hospital.rohini_id if hospital else None,
+        "hospital_email": hospital.email if hospital else None,
+    }
 
     # Fetch CC emails matching this hospital and/or provider
     cc_query = db.query(CcEmail)
