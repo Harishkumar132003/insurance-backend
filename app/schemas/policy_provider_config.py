@@ -16,7 +16,7 @@ class PolicyProviderCreate(BaseModel):
     tpa_toll_free_fax: str | None = None
     is_onboarded: bool = False
     auth: AuthConfig | None = None
-    steps: list[StepConfig]
+    steps: list[StepConfig] = []
     required_fields: list[str] = []
 
 

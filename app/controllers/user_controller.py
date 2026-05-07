@@ -77,6 +77,8 @@ def create_user(db: Session, payload: UserCreate, current_user: User):
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail="Policy provider not found",
             )
+        if not provider.is_onboarded:
+            provider.is_onboarded = True
         # Provider users have no hospital.
         payload.hospital_id = None
     else:

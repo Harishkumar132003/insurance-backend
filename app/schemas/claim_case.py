@@ -206,11 +206,3 @@ class ClaimCaseSubmissionsResponse(BaseModel):
     files: list[ClaimCaseFileItem] = []
 
 
-class ProviderActionRequest(BaseModel):
-    status: str  # APPROVED, PARTIALLY_APPROVED, DENIED, ADR_NMI
-    approved_amount: float | None = None
-    claim_number: str | None = None
-    remarks: str | None = None
-    query_details: str | None = None
-    documents_requested: str | None = None
-    documents_list: list[str] | None = None

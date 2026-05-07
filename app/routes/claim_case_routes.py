@@ -1,7 +1,7 @@
 from typing import List
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, File, Query, UploadFile
+from fastapi import APIRouter, Depends, File, Form, Query, UploadFile
 from sqlalchemy.orm import Session
 
 from app.db.session import get_db
@@ -15,7 +15,6 @@ from app.schemas.claim_case import (
     ClaimCaseSubmissionsResponse,
     ClaimListItem,
     PaginatedProviderQueueResponse,
-    ProviderActionRequest,
 )
 from app.schemas.claim_case_document import ClaimCaseDocumentResponse
 from app.schemas.claim_case_email import ClaimCaseEmailResponse, ClaimCaseEmailListResponse, PaginatedEmailListResponse, ClaimCaseEmailValidateRequest
@@ -39,7 +38,7 @@ def get_all_claims(
     return claim_case_controller.get_all_claims(
         db,
         current_user.hospital_id,
-        exclude_draft=exclude_draft,
+        exclude_draft=exclude_draft or current_user.role == "INSURANCE_PROVIDER",
         provider_id=provider_id,
         policy_provider_id=policy_provider_id,
     )
@@ -64,23 +63,40 @@ def get_provider_queue(
 
 
 @router.patch("/{claim_case_id}/provider-action", response_model=ClaimCaseResponse)
-def provider_action(
+async def provider_action(
     claim_case_id: UUID,
-    payload: ProviderActionRequest,
+    status: str = Form(..., description="APPROVED, PARTIALLY_APPROVED, DENIED, ADR_NMI"),
+    approved_amount: float | None = Form(default=None),
+    claim_number: str | None = Form(default=None),
+    remarks: str | None = Form(default=None),
+    query_details: str | None = Form(default=None),
+    documents_requested: str | None = Form(default=None),
+    documents_list: list[str] | None = Form(default=None),
+    file: UploadFile | None = File(default=None),
     db: Session = Depends(get_db),
     current_user: User = Depends(require_insurance_provider),
 ):
+    file_bytes: bytes | None = None
+    file_name: str | None = None
+    file_content_type: str | None = None
+    if file is not None and file.filename:
+        file_bytes = await file.read()
+        file_name = file.filename
+        file_content_type = file.content_type
     return claim_case_email_controller.process_by_provider(
         db,
         claim_case_id,
         current_user,
-        new_status=payload.status,
-        approved_amount=payload.approved_amount,
-        claim_number=payload.claim_number,
-        remarks=payload.remarks,
-        query_details=payload.query_details,
-        documents_requested=payload.documents_requested,
-        documents_list=payload.documents_list,
+        new_status=status,
+        approved_amount=approved_amount,
+        claim_number=claim_number,
+        remarks=remarks,
+        query_details=query_details,
+        documents_requested=documents_requested,
+        documents_list=documents_list,
+        attachment_bytes=file_bytes,
+        attachment_filename=file_name,
+        attachment_content_type=file_content_type,
     )
 
 

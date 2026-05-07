@@ -11,6 +11,9 @@ class FormTemplate(Base):
     id = Column(BigInteger, primary_key=True, autoincrement=True)
     name = Column(String, nullable=False)
     version = Column(Integer, nullable=False)
+    # Discriminates the kind of template: PRE_AUTH (hospital pre-auth form),
+    # FORM_C (provider approval letter), etc.
+    form_type = Column(String, nullable=False, server_default="PRE_AUTH")
     html_content = Column(Text, nullable=True)
     policy_provider_id = Column(UUID(as_uuid=True), ForeignKey("policy_provider_configs.id"), nullable=False)
     is_active = Column(Boolean, default=True, nullable=False)
@@ -19,5 +22,5 @@ class FormTemplate(Base):
     policy_provider = relationship("PolicyProviderConfig")
 
     __table_args__ = (
-        UniqueConstraint("name", "version", name="uq_form_template_name_version"),
+        UniqueConstraint("name", "version", "form_type", name="uq_form_template_name_version_type"),
     )

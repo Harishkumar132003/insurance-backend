@@ -14,7 +14,7 @@ from app.models.hospital import Hospital
 from app.models.policy_provider_config import PolicyProviderConfig
 from app.models.query_log import QueryLog
 from app.models.status_history import StatusHistory
-from app.utils.file_storage import get_attachment_full_path
+from app.utils.file_storage import get_attachment_full_path, save_attachment
 
 
 def get_all_claim_case_emails(
@@ -452,6 +452,9 @@ def process_by_provider(
     query_details: str | None,
     documents_requested: str | None,
     documents_list: list[str] | None = None,
+    attachment_bytes: bytes | None = None,
+    attachment_filename: str | None = None,
+    attachment_content_type: str | None = None,
 ):
     from app.controllers.claim_case_controller import (
         AWAITING_PROVIDER_STATUSES,
@@ -572,6 +575,27 @@ def process_by_provider(
         validated_by=current_user.id,
     )
     db.add(synthetic_email)
+
+    # Provider-uploaded approval letter (or other supporting file) — only
+    # accepted on outcome statuses; ADR_NMI uses documents_list instead.
+    if (
+        attachment_bytes
+        and attachment_filename
+        and new_status in ("APPROVED", "PARTIALLY_APPROVED", "DENIED")
+    ):
+        db.flush()  # ensure synthetic_email.id is assigned
+        stored_filename, file_path = save_attachment(
+            claim_case.id, attachment_bytes, attachment_filename
+        )
+        db.add(ClaimCaseEmailAttachment(
+            email_id=synthetic_email.id,
+            claim_case_id=claim_case.id,
+            original_filename=attachment_filename,
+            stored_filename=stored_filename,
+            file_path=file_path,
+            content_type=attachment_content_type,
+            file_size=len(attachment_bytes),
+        ))
 
     db.commit()
     db.refresh(claim_case)
