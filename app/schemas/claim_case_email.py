@@ -73,6 +73,8 @@ class AllClaimCaseEmailListItem(BaseModel):
     is_read: bool = False
     provider_read: bool = True
     ai_suggested_status: str | None = None
+    ai_suggested_claim_number: str | None = None
+    ai_suggested_amount: float | None = None
     validation_status: str = "PENDING"
     is_latest: bool = False
     created_at: datetime

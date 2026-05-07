@@ -1,4 +1,4 @@
-from sqlalchemy import Column, BigInteger, String, Text, DateTime, ForeignKey, Index, func
+from sqlalchemy import Column, BigInteger, Numeric, String, Text, DateTime, ForeignKey, Index, func
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import relationship
 
@@ -13,6 +13,9 @@ class StatusHistory(Base):
     stage = Column(String, nullable=False)
     status = Column(String, nullable=False)
     remarks = Column(Text, nullable=True)
+    # Amount approved in THIS round only (not cumulative). Set when status is
+    # APPROVED or PARTIALLY_APPROVED. Cumulative total lives on claim_cases.approved_amount.
+    approved_amount = Column(Numeric(12, 2), nullable=True)
     changed_by = Column(String, nullable=True)
     updated_by = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())

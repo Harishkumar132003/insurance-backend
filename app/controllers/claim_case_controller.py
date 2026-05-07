@@ -126,6 +126,10 @@ def get_claim_case(db: Session, claim_case_id, current_user=None) -> ClaimCase:
             detail="Not allowed to access this claim case",
         )
     claim_case.unread_count = sum(1 for e in claim_case.emails if not e.is_read)
+    # Newest history first.
+    claim_case.status_history = sorted(
+        claim_case.status_history, key=lambda x: x.created_at, reverse=True
+    )
 
     # Fetch policy provider email
     provider = db.query(PolicyProviderConfig).filter(

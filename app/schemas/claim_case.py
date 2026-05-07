@@ -35,6 +35,7 @@ class StatusHistoryItem(BaseModel):
     stage: str
     status: str
     remarks: str | None = None
+    approved_amount: float | None = None  # per-round amount (not cumulative)
     changed_by: str | None = None
     updated_by: UUID | None = None
     created_at: datetime
@@ -190,11 +191,11 @@ class PaginatedProviderQueueResponse(BaseModel):
 
 class ClaimCaseFileItem(BaseModel):
     id: int
-    email_id: int
+    email_id: int | None = None  # null for DRAFT files (uploaded but not yet sent)
     filename: str
     content_type: str | None = None
     file_size: int | None = None
-    direction: str  # SENT (hospital → provider) or RECEIVED (provider → hospital)
+    direction: str  # DRAFT (uploaded, not sent) | SENT (hospital → provider) | RECEIVED (provider → hospital)
     email_type: str | None = None  # SUBMITTED, ENHANCE_SUBMITTED, ADR_NMI, APPROVAL, ...
     view_url: str
     download_url: str

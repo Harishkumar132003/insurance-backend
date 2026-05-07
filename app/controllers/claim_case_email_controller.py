@@ -85,6 +85,8 @@ def get_all_claim_case_emails(
             "is_read": email.is_read,
             "provider_read": email.provider_read,
             "ai_suggested_status": email.ai_suggested_status,
+            "ai_suggested_claim_number": email.ai_suggested_claim_number,
+            "ai_suggested_amount": float(email.ai_suggested_amount) if email.ai_suggested_amount is not None else None,
             "validation_status": email.validation_status,
             "is_latest": email.id in latest_ids,
             "created_at": email.created_at,
@@ -320,11 +322,14 @@ def validate_email_suggestion(
         if email.ai_suggested_claim_number and not claim_case.claim_number:
             claim_case.claim_number = email.ai_suggested_claim_number
 
+        round_amount = None
         if (
             email.ai_suggested_status in ("APPROVED", "PARTIALLY_APPROVED")
             and email.ai_suggested_amount is not None
         ):
-            claim_case.approved_amount = float(email.ai_suggested_amount)
+            round_amount = float(email.ai_suggested_amount)
+            prior_total = float(claim_case.approved_amount or 0)
+            claim_case.approved_amount = prior_total + round_amount
 
         # Create QueryLog when provider asks for docs / clarification
         if email.ai_suggested_status == "ADR_NMI":
@@ -349,11 +354,17 @@ def validate_email_suggestion(
                 q.resolved_at = datetime.now(timezone.utc)
 
         # Create StatusHistory
+        base_remarks = remarks or email.ai_summary or "AI suggestion approved by user"
+        if round_amount is not None:
+            cumulative = float(claim_case.approved_amount or 0)
+            amount_note = f"Approved this round: ₹{round_amount:,.2f} (cumulative: ₹{cumulative:,.2f})"
+            base_remarks = f"{base_remarks} | {amount_note}" if base_remarks else amount_note
         db.add(StatusHistory(
             claim_case_id=claim_case.id,
             stage=claim_case.current_stage,
             status=email.ai_suggested_status,
-            remarks=remarks or email.ai_summary or "AI suggestion approved by user",
+            remarks=base_remarks,
+            approved_amount=round_amount,
             changed_by="EMAIL_VALIDATED",
             updated_by=user_id,
         ))
@@ -488,8 +499,11 @@ def process_by_provider(
     if claim_number and not claim_case.claim_number:
         claim_case.claim_number = claim_number
 
+    round_amount = None
     if new_status in ("APPROVED", "PARTIALLY_APPROVED") and approved_amount is not None:
-        claim_case.approved_amount = float(approved_amount)
+        round_amount = float(approved_amount)
+        prior_total = float(claim_case.approved_amount or 0)
+        claim_case.approved_amount = prior_total + round_amount
 
     if new_status == "ADR_NMI":
         if documents_list is None:
@@ -517,11 +531,17 @@ def process_by_provider(
             q.status = "RESOLVED"
             q.resolved_at = datetime.now(timezone.utc)
 
+    base_remarks = remarks or query_details or "Processed by insurance provider"
+    if round_amount is not None:
+        cumulative = float(claim_case.approved_amount or 0)
+        amount_note = f"Approved this round: ₹{round_amount:,.2f} (cumulative: ₹{cumulative:,.2f})"
+        base_remarks = f"{base_remarks} | {amount_note}" if base_remarks else amount_note
     db.add(StatusHistory(
         claim_case_id=claim_case.id,
         stage=claim_case.current_stage,
         status=new_status,
-        remarks=remarks or query_details or "Processed by insurance provider",
+        remarks=base_remarks,
+        approved_amount=round_amount,
         changed_by="PROVIDER_ACTION",
         updated_by=current_user.id,
     ))
@@ -559,8 +579,36 @@ def process_by_provider(
 
 
 def get_submissions_and_responses(db: Session, claim_case_id) -> dict:
-    """Return a flat, time-ordered list of every file attached to this claim
-    (hospital submissions on SENT rows + provider replies on RECEIVED rows)."""
+    """Return a flat, time-ordered list of every file on this claim:
+    - DRAFT: uploaded via /documents but not yet attached to a sent email
+    - SENT:  hospital submissions (each round)
+    - RECEIVED: provider replies (any attachments they sent back)"""
+    from app.models.claim_case_document import ClaimCaseDocument
+
+    files = []
+
+    # DRAFT files — uploaded directly to the claim, not yet sent
+    docs = (
+        db.query(ClaimCaseDocument)
+        .filter(ClaimCaseDocument.claim_case_id == claim_case_id)
+        .order_by(ClaimCaseDocument.created_at.asc())
+        .all()
+    )
+    for d in docs:
+        files.append({
+            "id": d.id,
+            "email_id": None,
+            "filename": d.original_filename,
+            "content_type": d.content_type,
+            "file_size": d.file_size,
+            "direction": "DRAFT",
+            "email_type": None,
+            "view_url": f"/api/v1/claim-cases/{claim_case_id}/documents/{d.id}/view",
+            "download_url": f"/api/v1/claim-cases/{claim_case_id}/documents/{d.id}/download",
+            "created_at": d.created_at,
+        })
+
+    # SENT and RECEIVED files — attachments on every email row
     emails = (
         db.query(ClaimCaseEmail)
         .options(joinedload(ClaimCaseEmail.attachments))
@@ -568,8 +616,6 @@ def get_submissions_and_responses(db: Session, claim_case_id) -> dict:
         .order_by(ClaimCaseEmail.created_at.asc())
         .all()
     )
-
-    files = []
     for e in emails:
         for a in e.attachments:
             files.append({
@@ -585,4 +631,5 @@ def get_submissions_and_responses(db: Session, claim_case_id) -> dict:
                 "created_at": a.created_at,
             })
 
+    files.sort(key=lambda f: f["created_at"])
     return {"files": files}
