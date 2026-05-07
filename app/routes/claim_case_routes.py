@@ -12,6 +12,7 @@ from app.schemas.claim_case import (
     ClaimCaseDetailResponse,
     ClaimCaseStatusUpdate,
     ClaimCaseExtractedDataUpdate,
+    ClaimCaseSubmissionsResponse,
     ClaimListItem,
     PaginatedProviderQueueResponse,
     ProviderActionRequest,
@@ -113,6 +114,18 @@ def get_claim_case(
     current_user: User = Depends(get_current_user),
 ):
     return claim_case_controller.get_claim_case(db, claim_case_id, current_user=current_user)
+
+
+@router.get("/{claim_case_id}/submissions", response_model=ClaimCaseSubmissionsResponse)
+def get_submissions_and_responses(
+    claim_case_id: UUID,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    # Reuse the access guard on the detail endpoint (raises 403 for cross-tenant
+    # INSURANCE_PROVIDER access).
+    claim_case_controller.get_claim_case(db, claim_case_id, current_user=current_user)
+    return claim_case_email_controller.get_submissions_and_responses(db, claim_case_id)
 
 
 @router.patch("/{claim_case_id}/status", response_model=ClaimCaseResponse)

@@ -188,6 +188,23 @@ class PaginatedProviderQueueResponse(BaseModel):
     total_pages: int
 
 
+class ClaimCaseFileItem(BaseModel):
+    id: int
+    email_id: int
+    filename: str
+    content_type: str | None = None
+    file_size: int | None = None
+    direction: str  # SENT (hospital → provider) or RECEIVED (provider → hospital)
+    email_type: str | None = None  # SUBMITTED, ENHANCE_SUBMITTED, ADR_NMI, APPROVAL, ...
+    view_url: str
+    download_url: str
+    created_at: datetime
+
+
+class ClaimCaseSubmissionsResponse(BaseModel):
+    files: list[ClaimCaseFileItem] = []
+
+
 class ProviderActionRequest(BaseModel):
     status: str  # APPROVED, PARTIALLY_APPROVED, DENIED, ADR_NMI
     approved_amount: float | None = None

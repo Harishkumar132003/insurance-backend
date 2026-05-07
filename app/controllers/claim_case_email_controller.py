@@ -556,3 +556,33 @@ def process_by_provider(
     db.commit()
     db.refresh(claim_case)
     return claim_case
+
+
+def get_submissions_and_responses(db: Session, claim_case_id) -> dict:
+    """Return a flat, time-ordered list of every file attached to this claim
+    (hospital submissions on SENT rows + provider replies on RECEIVED rows)."""
+    emails = (
+        db.query(ClaimCaseEmail)
+        .options(joinedload(ClaimCaseEmail.attachments))
+        .filter(ClaimCaseEmail.claim_case_id == claim_case_id)
+        .order_by(ClaimCaseEmail.created_at.asc())
+        .all()
+    )
+
+    files = []
+    for e in emails:
+        for a in e.attachments:
+            files.append({
+                "id": a.id,
+                "email_id": e.id,
+                "filename": a.original_filename,
+                "content_type": a.content_type,
+                "file_size": a.file_size,
+                "direction": e.direction,
+                "email_type": e.email_type,
+                "view_url": f"/api/v1/claim-cases/{claim_case_id}/emails/{e.id}/attachments/{a.id}/view",
+                "download_url": f"/api/v1/claim-cases/{claim_case_id}/emails/{e.id}/attachments/{a.id}/download",
+                "created_at": a.created_at,
+            })
+
+    return {"files": files}

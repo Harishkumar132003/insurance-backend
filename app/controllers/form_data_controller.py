@@ -102,7 +102,7 @@ def create_claim_and_form_data(
         claim_case_id=claim_case.id,
         stage="PRE_AUTH",
         status="DRAFT",
-        remarks="Form submitted, claim case created",
+        remarks="Pre-auth form drafted",
     ))
 
     # 4. Save uploaded documents
