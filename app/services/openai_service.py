@@ -33,11 +33,15 @@ POLICY_SUMMARY_SCHEMA = {
     "schema": {
         "type": "object",
         "additionalProperties": False,
-        "required": ["summary", "chronic_conditions", "cost_estimates"],
+        "required": ["summary", "policy_number", "chronic_conditions", "cost_estimates"],
         "properties": {
             "summary": {
                 "type": "string",
                 "description": "Plain-language summary of the policy.",
+            },
+            "policy_number": {
+                "type": ["string", "null"],
+                "description": "Policy number extracted from the file (e.g. 'POL-2024-12345'). Null if no policy number is present in the document.",
             },
             "chronic_conditions": {
                 "type": "object",

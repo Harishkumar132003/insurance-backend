@@ -53,6 +53,7 @@ class CostEstimates(BaseModel):
 
 class PolicyWorkflowRunResponse(BaseModel):
     summary: str
+    policy_number: str | None = None
     data: dict[str, Any]
     steps_debug: list[StepDebug]
     chronic_conditions: ChronicConditionsCoverage | None = None

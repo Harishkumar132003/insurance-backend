@@ -236,7 +236,10 @@ async def execute_policy_workflow_with_summary(
         default_prompt = (
             "Summarize this policy workflow response in plain language. "
             "Keep it concise and include key policy details, approval/rejection indicators, "
-            "and notable amounts or dates if present.\n\n"
+            "and notable amounts or dates if present. "
+            "Also extract the policy number from the attached file context "
+            "(or from the response JSON if not in the file) into the policy_number field; "
+            "use null if no policy number is present.\n\n"
             "Response JSON:\n{response_json}\n\n"
             "Attached file context:\n{file_context}"
         )
@@ -245,7 +248,9 @@ async def execute_policy_workflow_with_summary(
         default_prompt = (
             "Summarize the attached policy document context in plain language. "
             "Keep it concise and include important coverage details, restrictions, waiting periods, "
-            "and notable amounts or dates if present.\n\n"
+            "and notable amounts or dates if present. "
+            "Also extract the policy number from the document into the policy_number field; "
+            "use null if no policy number is present.\n\n"
             "Attached file context:\n{file_context}"
         )
 
@@ -262,6 +267,7 @@ async def execute_policy_workflow_with_summary(
     structured = await summarize_policy_with_openai(prompt)
     return {
         "summary": structured.get("summary", ""),
+        "policy_number": structured.get("policy_number"),
         "data": response_data,
         "steps_debug": steps_debug,
         "chronic_conditions": structured.get("chronic_conditions"),
