@@ -25,7 +25,9 @@ branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
 
-PROVIDER_SLUG = "SBI-provider"
+# Different environments seed the SBI provider with slightly different slugs
+# ("SBI-provider" on the dev DB, "SBI" on the live server). Try each in order.
+PROVIDER_SLUG_CANDIDATES = ("SBI-provider", "SBI")
 TEMPLATE_NAME = "part-d-default"
 TEMPLATE_VERSION = 1
 TEMPLATE_FORM_TYPE = "PART_D"
@@ -244,16 +246,20 @@ PART_D_HTML = r"""<!DOCTYPE html>
 
 def upgrade() -> None:
     conn = op.get_bind()
-    provider_id = conn.execute(
-        sa.text(
-            "SELECT id FROM policy_provider_configs WHERE provider_id = :slug"
-        ),
-        {"slug": PROVIDER_SLUG},
-    ).scalar()
+    provider_id = None
+    for slug in PROVIDER_SLUG_CANDIDATES:
+        provider_id = conn.execute(
+            sa.text(
+                "SELECT id FROM policy_provider_configs WHERE provider_id = :slug"
+            ),
+            {"slug": slug},
+        ).scalar()
+        if provider_id is not None:
+            break
 
     if provider_id is None:
-        # Provider seed not present in this environment; skip silently so the
-        # migration is safe to run anywhere.
+        # SBI provider seed not present in this environment; skip silently so
+        # the migration is safe to run anywhere.
         return
 
     existing = conn.execute(
