@@ -33,6 +33,10 @@ class ClaimCaseEmail(Base):
     ai_documents_requested = Column(Text, nullable=True)
     # Structured list (AI-extracted) of document names requested by the provider.
     ai_documents_list = Column(JSONB, nullable=True)
+    # Structured form payload submitted by the hospital (denial reason, justification,
+    # co-signing physician, etc.) so the onboarded-provider UI can render a form view
+    # rather than just the rendered email body. Shape varies per email_type.
+    form_values = Column(JSONB, nullable=True)
     validation_status = Column(String, nullable=False, default="PENDING", server_default="PENDING")
     validated_at = Column(DateTime(timezone=True), nullable=True)
     validated_by = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=True)

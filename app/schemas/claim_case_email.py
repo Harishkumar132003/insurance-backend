@@ -1,4 +1,5 @@
 from datetime import datetime
+from typing import Any
 from uuid import UUID
 
 from pydantic import BaseModel
@@ -23,6 +24,7 @@ class ClaimCaseEmailResponse(BaseModel):
     to_email: str
     subject: str | None = None
     body: str | None = None
+    form_values: dict[str, Any] | None = None
     email_date: datetime | None = None
     is_read: bool = False
     provider_read: bool = True
@@ -75,6 +77,7 @@ class AllClaimCaseEmailListItem(BaseModel):
     ai_suggested_status: str | None = None
     ai_suggested_claim_number: str | None = None
     ai_suggested_amount: float | None = None
+    form_values: dict[str, Any] | None = None
     validation_status: str = "PENDING"
     is_latest: bool = False
     created_at: datetime

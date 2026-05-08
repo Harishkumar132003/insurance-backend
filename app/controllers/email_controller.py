@@ -50,6 +50,8 @@ def send_form_email(
     cc_emails: list[str] | None = None,
     pdf_data: bytes | None = None,
     pdf_filename: str = "form.pdf",
+    form_values: dict | None = None,
+    email_type: str | None = None,
 ) -> dict:
     # 1. Fetch claim_case
     claim_case = db.query(ClaimCase).filter(ClaimCase.id == claim_case_id).first()
@@ -137,8 +139,9 @@ def send_form_email(
         to_email=to_email,
         subject=subject,
         body=content,
+        form_values=form_values,
         thread_id=claim_case.thread_id,
-        email_type="SUBMITTED",
+        email_type=email_type or "SUBMITTED",
         email_date=datetime.now(timezone.utc),
         is_read=True,
         provider_read=not is_onboarded,
@@ -181,6 +184,8 @@ def send_query_email(
     cc_emails: list[str] | None = None,
     pdf_data: bytes | None = None,
     pdf_filename: str = "form.pdf",
+    form_values: dict | None = None,
+    email_type: str | None = None,
 ) -> dict:
     claim_case = db.query(ClaimCase).filter(ClaimCase.id == claim_case_id).first()
     if not claim_case:
@@ -280,8 +285,9 @@ def send_query_email(
         to_email=to_email,
         subject=subject,
         body=content,
+        form_values=form_values,
         thread_id=claim_case.thread_id,
-        email_type=next_state,
+        email_type=email_type or next_state,
         email_date=datetime.now(timezone.utc),
         is_read=True,
         provider_read=not is_onboarded,

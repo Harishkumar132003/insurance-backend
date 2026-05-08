@@ -1,6 +1,7 @@
+import json
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, Form, Query, UploadFile, File
+from fastapi import APIRouter, Depends, Form, HTTPException, Query, UploadFile, File, status
 from sqlalchemy.orm import Session
 
 from app.db.session import get_db
@@ -12,6 +13,24 @@ from app.controllers import email_controller
 router = APIRouter(prefix="/email", tags=["Email"])
 
 
+def _parse_form_values(raw: str | None) -> dict | None:
+    if raw is None or raw == "":
+        return None
+    try:
+        parsed = json.loads(raw)
+    except json.JSONDecodeError as e:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"form_values is not valid JSON: {e}",
+        )
+    if not isinstance(parsed, dict):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="form_values must be a JSON object",
+        )
+    return parsed
+
+
 @router.post("/send", response_model=SendEmailResponse)
 async def send_form_email(
     claim_case_id: UUID = Form(...),
@@ -19,6 +38,8 @@ async def send_form_email(
     subject: str = Form(...),
     content: str = Form(...),
     cc_emails: list[str] = Form(default=[]),
+    form_values: str | None = Form(default=None),
+    email_type: str | None = Form(default=None),
     file: UploadFile = File(None),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
@@ -33,6 +54,8 @@ async def send_form_email(
         cc_emails=cc_emails,
         pdf_data=pdf_data,
         pdf_filename=file.filename or "form.pdf" if file else "form.pdf",
+        form_values=_parse_form_values(form_values),
+        email_type=email_type,
     )
 
 
@@ -43,6 +66,8 @@ async def send_query_email(
     subject: str = Form(...),
     content: str = Form(...),
     cc_emails: list[str] = Form(default=[]),
+    form_values: str | None = Form(default=None),
+    email_type: str | None = Form(default=None),
     file: UploadFile = File(None),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
@@ -57,6 +82,8 @@ async def send_query_email(
         cc_emails=cc_emails,
         pdf_data=pdf_data,
         pdf_filename=file.filename or "form.pdf" if file else "form.pdf",
+        form_values=_parse_form_values(form_values),
+        email_type=email_type,
     )
 
 

@@ -87,6 +87,7 @@ def get_all_claim_case_emails(
             "ai_suggested_status": email.ai_suggested_status,
             "ai_suggested_claim_number": email.ai_suggested_claim_number,
             "ai_suggested_amount": float(email.ai_suggested_amount) if email.ai_suggested_amount is not None else None,
+            "form_values": email.form_values,
             "validation_status": email.validation_status,
             "is_latest": email.id in latest_ids,
             "created_at": email.created_at,
