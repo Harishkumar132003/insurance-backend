@@ -1,7 +1,7 @@
 from typing import List
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, File, Form, Query, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Request, UploadFile, status
 from sqlalchemy.orm import Session
 
 from app.db.session import get_db
@@ -65,29 +65,74 @@ def get_provider_queue(
 @router.patch("/{claim_case_id}/provider-action", response_model=ClaimCaseResponse)
 async def provider_action(
     claim_case_id: UUID,
-    status: str = Form(..., description="APPROVED, PARTIALLY_APPROVED, DENIED, ADR_NMI"),
-    approved_amount: float | None = Form(default=None),
-    claim_number: str | None = Form(default=None),
-    remarks: str | None = Form(default=None),
-    query_details: str | None = Form(default=None),
-    documents_requested: str | None = Form(default=None),
-    documents_list: list[str] | None = Form(default=None),
-    file: UploadFile | None = File(default=None),
+    request: Request,
     db: Session = Depends(get_db),
     current_user: User = Depends(require_insurance_provider),
 ):
+    """Accepts JSON or multipart/form-data. JSON is the simple path; multipart
+    is required when attaching a file (approval letter / supporting doc)."""
+    content_type = request.headers.get("content-type", "")
+
     file_bytes: bytes | None = None
     file_name: str | None = None
     file_content_type: str | None = None
-    if file is not None and file.filename:
-        file_bytes = await file.read()
-        file_name = file.filename
-        file_content_type = file.content_type
+
+    if content_type.startswith("multipart/form-data"):
+        form = await request.form()
+        new_status = form.get("status")
+        approved_amount_raw = form.get("approved_amount")
+        claim_number = form.get("claim_number")
+        remarks = form.get("remarks")
+        query_details = form.get("query_details")
+        documents_requested = form.get("documents_requested")
+        documents_list = form.getlist("documents_list") or None
+        upload = form.get("file")
+        if upload is not None and hasattr(upload, "read") and getattr(upload, "filename", None):
+            file_bytes = await upload.read()
+            file_name = upload.filename
+            file_content_type = upload.content_type
+    else:
+        try:
+            body = await request.json()
+        except Exception:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Body must be valid JSON or multipart/form-data",
+            )
+        if not isinstance(body, dict):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="JSON body must be an object",
+            )
+        new_status = body.get("status")
+        approved_amount_raw = body.get("approved_amount")
+        claim_number = body.get("claim_number")
+        remarks = body.get("remarks")
+        query_details = body.get("query_details")
+        documents_requested = body.get("documents_requested")
+        documents_list = body.get("documents_list")
+
+    if not new_status:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="status is required",
+        )
+
+    approved_amount = None
+    if approved_amount_raw not in (None, ""):
+        try:
+            approved_amount = float(approved_amount_raw)
+        except (TypeError, ValueError):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="approved_amount must be a number",
+            )
+
     return claim_case_email_controller.process_by_provider(
         db,
         claim_case_id,
         current_user,
-        new_status=status,
+        new_status=new_status,
         approved_amount=approved_amount,
         claim_number=claim_number,
         remarks=remarks,

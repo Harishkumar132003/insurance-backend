@@ -48,8 +48,7 @@ def send_form_email(
     subject: str,
     content: str,
     cc_emails: list[str] | None = None,
-    pdf_data: bytes | None = None,
-    pdf_filename: str = "form.pdf",
+    uploaded_files: list[tuple[bytes, str, str]] | None = None,
     form_values: dict | None = None,
     email_type: str | None = None,
 ) -> dict:
@@ -73,10 +72,8 @@ def send_form_email(
         claim_case.thread_id = uuid.uuid4().hex[:12]
     subject = f"{subject} [{claim_case.thread_id}]"
 
-    # 3. Build attachments list: form PDF + uploaded documents
-    attachments: list[tuple[bytes, str, str]] = []
-    if pdf_data:
-        attachments.append((pdf_data, pdf_filename, "application/pdf"))
+    # 3. Build attachments list: per-request uploads + claim-case documents
+    attachments: list[tuple[bytes, str, str]] = list(uploaded_files or [])
 
     documents = db.query(ClaimCaseDocument).filter(
         ClaimCaseDocument.claim_case_id == claim_case_id
@@ -182,8 +179,7 @@ def send_query_email(
     subject: str,
     content: str,
     cc_emails: list[str] | None = None,
-    pdf_data: bytes | None = None,
-    pdf_filename: str = "form.pdf",
+    uploaded_files: list[tuple[bytes, str, str]] | None = None,
     form_values: dict | None = None,
     email_type: str | None = None,
 ) -> dict:
@@ -209,10 +205,8 @@ def send_query_email(
 
     subject = f"{subject} [{claim_case.thread_id}]"
 
-    # Build attachments list: optional PDF + uploaded documents
-    attachments: list[tuple[bytes, str, str]] = []
-    if pdf_data:
-        attachments.append((pdf_data, pdf_filename, "application/pdf"))
+    # Build attachments list: per-request uploads + claim-case documents
+    attachments: list[tuple[bytes, str, str]] = list(uploaded_files or [])
 
     documents = db.query(ClaimCaseDocument).filter(
         ClaimCaseDocument.claim_case_id == claim_case_id

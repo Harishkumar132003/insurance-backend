@@ -31,6 +31,32 @@ def _parse_form_values(raw: str | None) -> dict | None:
     return parsed
 
 
+async def _read_uploaded_files(
+    files: list[UploadFile] | None,
+) -> list[tuple[bytes, str, str]]:
+    """Read each uploaded file into (bytes, filename, content_type) tuples.
+
+    The FE may send multiple form fields named ``file`` (e.g. ADR responses
+    that attach a per-item document plus extra files). FastAPI surfaces them
+    as a list when the parameter is typed as ``list[UploadFile]``.
+    """
+    if not files:
+        return []
+    out: list[tuple[bytes, str, str]] = []
+    for f in files:
+        if not f or not f.filename:
+            continue
+        data = await f.read()
+        if not data:
+            continue
+        out.append((
+            data,
+            f.filename or "attachment",
+            f.content_type or "application/octet-stream",
+        ))
+    return out
+
+
 @router.post("/send", response_model=SendEmailResponse)
 async def send_form_email(
     claim_case_id: UUID = Form(...),
@@ -40,11 +66,11 @@ async def send_form_email(
     cc_emails: list[str] = Form(default=[]),
     form_values: str | None = Form(default=None),
     email_type: str | None = Form(default=None),
-    file: UploadFile = File(None),
+    file: list[UploadFile] = File(default=[]),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    pdf_data = await file.read() if file else None
+    uploaded_files = await _read_uploaded_files(file)
     return email_controller.send_form_email(
         db=db,
         claim_case_id=claim_case_id,
@@ -52,8 +78,7 @@ async def send_form_email(
         subject=subject,
         content=content,
         cc_emails=cc_emails,
-        pdf_data=pdf_data,
-        pdf_filename=file.filename or "form.pdf" if file else "form.pdf",
+        uploaded_files=uploaded_files,
         form_values=_parse_form_values(form_values),
         email_type=email_type,
     )
@@ -68,11 +93,11 @@ async def send_query_email(
     cc_emails: list[str] = Form(default=[]),
     form_values: str | None = Form(default=None),
     email_type: str | None = Form(default=None),
-    file: UploadFile = File(None),
+    file: list[UploadFile] = File(default=[]),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    pdf_data = await file.read() if file else None
+    uploaded_files = await _read_uploaded_files(file)
     return email_controller.send_query_email(
         db=db,
         claim_case_id=claim_case_id,
@@ -80,8 +105,7 @@ async def send_query_email(
         subject=subject,
         content=content,
         cc_emails=cc_emails,
-        pdf_data=pdf_data,
-        pdf_filename=file.filename or "form.pdf" if file else "form.pdf",
+        uploaded_files=uploaded_files,
         form_values=_parse_form_values(form_values),
         email_type=email_type,
     )
