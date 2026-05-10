@@ -1,3 +1,4 @@
+import html
 import imaplib
 import smtplib
 import email as email_lib
@@ -10,6 +11,27 @@ from email.utils import make_msgid
 from fastapi import HTTPException, status
 
 from app.core.config import settings
+
+
+def _build_email_body_parts(body: str) -> tuple[str, str]:
+    """Return (plain_text, html) representations of a body composed with `\\n`
+    newlines. The plain-text part preserves the original formatting verbatim.
+    The HTML part HTML-escapes the body and converts newlines to <br> so
+    Gmail / Outlook render the same line breaks the user sees in the preview
+    instead of collapsing whitespace into a single sentence.
+    """
+    plain = body or ""
+    # Normalise CRLF → LF before escaping so a single newline always becomes
+    # a single <br>.
+    normalized = plain.replace("\r\n", "\n").replace("\r", "\n")
+    escaped = html.escape(normalized).replace("\n", "<br>")
+    html_body = (
+        '<div style="font-family:Arial,sans-serif;font-size:14px;'
+        'line-height:1.55;color:#111827;white-space:normal;">'
+        f"{escaped}"
+        "</div>"
+    )
+    return plain, html_body
 
 
 def send_email(
@@ -63,7 +85,14 @@ def send_email(
         msg["In-Reply-To"] = in_reply_to
     if references:
         msg["References"] = " ".join(references)
-    msg.attach(MIMEText(body, "html"))
+
+    # multipart/alternative inside multipart/mixed is the standard layout for
+    # an email that has both plain-text + HTML bodies and attachments.
+    plain_body, html_body = _build_email_body_parts(body)
+    body_alt = MIMEMultipart("alternative")
+    body_alt.attach(MIMEText(plain_body, "plain", "utf-8"))
+    body_alt.attach(MIMEText(html_body, "html", "utf-8"))
+    msg.attach(body_alt)
 
     if attachments:
         for file_bytes, filename, content_type in attachments:

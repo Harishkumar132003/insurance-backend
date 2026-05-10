@@ -21,6 +21,7 @@ def get_all_claims(
     exclude_draft: bool = False,
     provider_id: UUID | None = None,
     policy_provider_id: UUID | None = None,
+    q: str | None = None,
 ) -> list[dict]:
     query = db.query(ClaimCase)
     if policy_provider_id is not None:
@@ -34,6 +35,23 @@ def get_all_claims(
 
     if provider_id:
         query = query.filter(ClaimCase.policy_provider_id == provider_id)
+
+    # Search: matches UHID directly OR a patient_name on any FormData row for
+    # this claim (form_data.data_json -> patient_insured -> patient_name).
+    # Case-insensitive substring match. Empty string is ignored.
+    if q and q.strip():
+        needle = f"%{q.strip()}%"
+        patient_name_match = (
+            sa.exists()
+            .where(FormData.claim_case_id == ClaimCase.id)
+            .where(
+                FormData.data_json["patient_insured"]["patient_name"]
+                .astext.ilike(needle)
+            )
+        )
+        query = query.filter(
+            sa.or_(ClaimCase.uhid.ilike(needle), patient_name_match)
+        )
 
     claim_cases = query.order_by(ClaimCase.created_at.desc()).all()
 
@@ -202,15 +220,18 @@ def get_claim_case(db: Session, claim_case_id, current_user=None) -> ClaimCase:
 
 # Workflow states on ClaimCase.status
 AWAITING_PROVIDER_STATUSES = {"SUBMITTED", "ENHANCE_SUBMITTED", "RECONSIDER", "ADR_SUBMITTED"}
-OUTCOME_STATUSES = {"APPROVED", "PARTIALLY_APPROVED", "DENIED", "ADR_NMI"}
+OUTCOME_STATUSES = {"APPROVED", "PARTIALLY_APPROVED", "DENIED", "ENHANCEMENT_DENIED", "ADR_NMI"}
 VALID_STATUSES = {"DRAFT"} | AWAITING_PROVIDER_STATUSES | OUTCOME_STATUSES | {"UNKNOWN"}
 
 # Map the current outcome to the workflow state we move into when the hospital
 # sends a reply (query / docs) back to the provider. See claim-flow diagram.
+# ENHANCEMENT_DENIED → ENHANCE_SUBMITTED: hospital re-files the enhancement
+# request after a rejection (additional justification / documentation).
 QUERY_RAISE_STATE = {
     "APPROVED": "ENHANCE_SUBMITTED",
     "PARTIALLY_APPROVED": "ENHANCE_SUBMITTED",
     "DENIED": "RECONSIDER",
+    "ENHANCEMENT_DENIED": "ENHANCE_SUBMITTED",
     "ADR_NMI": "ADR_SUBMITTED",
 }
 
@@ -249,6 +270,7 @@ STATUS_TO_EMAIL_TYPE = {
     "APPROVED": "APPROVAL",
     "PARTIALLY_APPROVED": "PARTIAL_APPROVAL",
     "DENIED": "DENIAL",
+    "ENHANCEMENT_DENIED": "ENHANCEMENT_DENIAL",
     "ADR_NMI": "ADR_NMI",
 }
 
@@ -296,6 +318,10 @@ def update_extracted_data(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail=f"Invalid claim_status '{payload.claim_status}'. Must be one of: {', '.join(sorted(VALID_CLAIM_STATUSES))}",
             )
+        # Business rule: once any approved amount exists, a fresh DENIED is
+        # really an enhancement-denial — the original approval still stands.
+        if new_claim_status == "DENIED" and float(claim_case.approved_amount or 0) > 0:
+            new_claim_status = "ENHANCEMENT_DENIED"
         claim_case.claim_status = new_claim_status
 
         # Auto-sync email_type from claim_status only if not explicitly provided
@@ -303,7 +329,7 @@ def update_extracted_data(
             email_record.email_type = STATUS_TO_EMAIL_TYPE[new_claim_status]
 
         # Resolve open query logs on a terminal outcome (approved/partial/denied)
-        if new_claim_status in ("APPROVED", "PARTIALLY_APPROVED", "DENIED"):
+        if new_claim_status in ("APPROVED", "PARTIALLY_APPROVED", "DENIED", "ENHANCEMENT_DENIED"):
             open_queries = (
                 db.query(QueryLog)
                 .filter(QueryLog.claim_case_id == claim_case.id, QueryLog.status == "OPEN")
@@ -317,9 +343,29 @@ def update_extracted_data(
     if payload.claim_number is not None:
         claim_case.claim_number = payload.claim_number
 
-    # Update approved_amount (allow setting to null)
+    # Update approved_amount. Business rule: once a non-zero amount has been
+    # approved, never let it drop back to null/zero — only equal-or-higher
+    # values are accepted. A null in the payload is treated as "leave as-is"
+    # (frontends often resend the full object on every save) so we silently
+    # skip the field; only a numeric value below the existing total is an
+    # actual downgrade attempt and is rejected.
     if "approved_amount" in payload.model_fields_set:
-        claim_case.approved_amount = payload.approved_amount
+        prior = float(claim_case.approved_amount or 0)
+        incoming = payload.approved_amount
+        if incoming is None:
+            if prior == 0:
+                claim_case.approved_amount = None  # nothing was set; allow null
+            # else: keep the existing approved_amount untouched
+        else:
+            if prior > 0 and float(incoming) < prior:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=(
+                        f"approved_amount cannot drop below the existing total "
+                        f"(current: {prior})"
+                    ),
+                )
+            claim_case.approved_amount = incoming
 
     # ADR-only: hospital reviewer can edit the documents the insurer asked for.
     # We always persist the edited list onto the email row (replacing the AI
@@ -363,11 +409,13 @@ def update_extracted_data(
                     status="OPEN",
                 ))
 
-    # Add status history for audit (link to the inbound email that was edited)
+    # Add status history for audit (link to the inbound email that was edited).
+    # Reads from claim_case.claim_status, which already reflects the
+    # DENIED → ENHANCEMENT_DENIED coercion above.
     db.add(StatusHistory(
         claim_case_id=claim_case.id,
         stage=claim_case.current_stage,
-        status=payload.claim_status.upper() if payload.claim_status else claim_case.claim_status or "UNKNOWN",
+        status=claim_case.claim_status or "UNKNOWN",
         remarks="Manual edit of AI-extracted data",
         email_id=email_id,
         changed_by="MANUAL_EDIT",

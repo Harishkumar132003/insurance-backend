@@ -27,6 +27,7 @@ router = APIRouter(prefix="/claim-cases", tags=["Claim Cases"])
 def get_all_claims(
     exclude_draft: bool = Query(default=False, description="Exclude claims with DRAFT status"),
     provider_id: UUID | None = Query(default=None, description="Filter by policy provider ID"),
+    q: str | None = Query(default=None, description="Search by UHID or patient name (case-insensitive substring match)"),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
@@ -41,6 +42,7 @@ def get_all_claims(
         exclude_draft=exclude_draft or current_user.role == "INSURANCE_PROVIDER",
         provider_id=provider_id,
         policy_provider_id=policy_provider_id,
+        q=q,
     )
 
 
@@ -218,7 +220,7 @@ def update_extracted_data(
 def get_claim_case_emails(
     claim_case_id: UUID,
     direction: str | None = Query(default=None, description="Filter by SENT or RECEIVED"),
-    email_type: str | None = Query(default=None, description="Filter by email type: SUBMITTED, ENHANCE_SUBMITTED, RECONSIDER, ADR_SUBMITTED, APPROVAL, PARTIAL_APPROVAL, DENIAL, ADR_NMI"),
+    email_type: str | None = Query(default=None, description="Filter by email type: SUBMITTED, ENHANCE_SUBMITTED, RECONSIDER, ADR_SUBMITTED, APPROVAL, PARTIAL_APPROVAL, DENIAL, ENHANCEMENT_DENIAL, ADR_NMI"),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):

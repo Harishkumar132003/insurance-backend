@@ -87,6 +87,9 @@ def get_all_claim_case_emails(
             "ai_suggested_status": email.ai_suggested_status,
             "ai_suggested_claim_number": email.ai_suggested_claim_number,
             "ai_suggested_amount": float(email.ai_suggested_amount) if email.ai_suggested_amount is not None else None,
+            "ai_query_details": email.ai_query_details,
+            "ai_documents_requested": email.ai_documents_requested,
+            "ai_documents_list": email.ai_documents_list,
             "form_values": email.form_values,
             "validation_status": email.validation_status,
             "is_latest": email.id in latest_ids,
@@ -317,15 +320,24 @@ def validate_email_suggestion(
 
         # Apply AI suggestion to claim case. The provider's reply moves the
         # workflow back into the matching outcome state in the flow diagram.
-        claim_case.claim_status = email.ai_suggested_status
-        claim_case.status = email.ai_suggested_status
+        # Business rule: once any approved amount exists on the claim, treat
+        # an inbound rejection as an enhancement-denial (the original approval
+        # still stands), not a full DENIED.
+        applied_status = email.ai_suggested_status
+        if applied_status == "DENIED" and float(claim_case.approved_amount or 0) > 0:
+            applied_status = "ENHANCEMENT_DENIED"
+            email.ai_suggested_status = applied_status
+            if email.email_type == "DENIAL":
+                email.email_type = "ENHANCEMENT_DENIAL"
+        claim_case.claim_status = applied_status
+        claim_case.status = applied_status
 
         if email.ai_suggested_claim_number and not claim_case.claim_number:
             claim_case.claim_number = email.ai_suggested_claim_number
 
         round_amount = None
         if (
-            email.ai_suggested_status in ("APPROVED", "PARTIALLY_APPROVED")
+            applied_status in ("APPROVED", "PARTIALLY_APPROVED")
             and email.ai_suggested_amount is not None
         ):
             round_amount = float(email.ai_suggested_amount)
@@ -344,7 +356,7 @@ def validate_email_suggestion(
             ))
 
         # Resolve open QueryLogs on a terminal outcome
-        if email.ai_suggested_status in ("APPROVED", "PARTIALLY_APPROVED", "DENIED"):
+        if email.ai_suggested_status in ("APPROVED", "PARTIALLY_APPROVED", "DENIED", "ENHANCEMENT_DENIED"):
             open_queries = (
                 db.query(QueryLog)
                 .filter(QueryLog.claim_case_id == claim_case.id, QueryLog.status == "OPEN")
@@ -440,7 +452,7 @@ def get_provider_queue(
     }
 
 
-_PROVIDER_ACTION_STATUSES = {"APPROVED", "PARTIALLY_APPROVED", "DENIED", "ADR_NMI"}
+_PROVIDER_ACTION_STATUSES = {"APPROVED", "PARTIALLY_APPROVED", "DENIED", "ENHANCEMENT_DENIED", "ADR_NMI"}
 
 
 def process_by_provider(
@@ -498,6 +510,13 @@ def process_by_provider(
         if claim_case.hospital_id else None
     )
 
+    # Business rule: once a claim has any approved amount on record, a fresh
+    # rejection is an enhancement-denial (the original approval still stands),
+    # never a full DENIED. Coerce here so the frontend / AI / manual flows all
+    # land at the same answer.
+    if new_status == "DENIED" and float(claim_case.approved_amount or 0) > 0:
+        new_status = "ENHANCEMENT_DENIED"
+
     claim_case.claim_status = new_status
     claim_case.status = new_status
 
@@ -526,7 +545,7 @@ def process_by_provider(
     else:
         documents_list = None
 
-    if new_status in ("APPROVED", "PARTIALLY_APPROVED", "DENIED"):
+    if new_status in ("APPROVED", "PARTIALLY_APPROVED", "DENIED", "ENHANCEMENT_DENIED"):
         open_queries = (
             db.query(QueryLog)
             .filter(QueryLog.claim_case_id == claim_case.id, QueryLog.status == "OPEN")
@@ -586,7 +605,7 @@ def process_by_provider(
     if (
         attachment_bytes
         and attachment_filename
-        and new_status in ("APPROVED", "PARTIALLY_APPROVED", "DENIED")
+        and new_status in ("APPROVED", "PARTIALLY_APPROVED", "DENIED", "ENHANCEMENT_DENIED")
     ):
         stored_filename, file_path = save_attachment(
             claim_case.id, attachment_bytes, attachment_filename

@@ -22,7 +22,7 @@ from app.utils.file_storage import save_attachment
 
 logger = logging.getLogger(__name__)
 
-VALID_STATUSES = {"APPROVED", "PARTIALLY_APPROVED", "DENIED", "ADR_NMI", "UNKNOWN"}
+VALID_STATUSES = {"APPROVED", "PARTIALLY_APPROVED", "DENIED", "ENHANCEMENT_DENIED", "ADR_NMI", "UNKNOWN"}
 
 OPENAI_PROMPT = """
 You are an expert in Indian health insurance claim processing.
@@ -36,7 +36,7 @@ Return STRICT JSON:
 {{
   "claim_number": "string or null",
   "uhid": "string or null",
-  "status": "APPROVED | PARTIALLY_APPROVED | DENIED | ADR_NMI | UNKNOWN",
+  "status": "APPROVED | PARTIALLY_APPROVED | DENIED | ENHANCEMENT_DENIED | ADR_NMI | UNKNOWN",
   "approved_amount": "number or null — extract the approved/sanctioned amount if status is APPROVED or PARTIALLY_APPROVED",
   "summary": "1-2 line summary",
   "query_details": "if ADR_NMI, describe what is being asked or what documents are needed. null otherwise",
@@ -71,13 +71,32 @@ IMPORTANT RULES (VERY STRICT):
    Common phrasing: "partially approved", "approved in part", "sanctioned amount" lower
    than the claim, explicit deductions reducing the payable amount.
 
-3. DENIED if:
+3. DENIED only if the ENTIRE claim is rejected up-front (no prior approval
+   on the thread, no money already sanctioned). Signals:
    - "rejected"
    - "denied"
    - "not payable"
    - "claim not admissible"
+   If the email is REPLYING to a previous authorization / partial approval
+   ("Re: ... Cashless Authorization", quoted prior approval letter, mention
+   of an existing claim/auth number with a sanctioned amount), DO NOT use
+   DENIED — use ENHANCEMENT_DENIED instead. The backend will also coerce
+   DENIED → ENHANCEMENT_DENIED whenever a prior approved amount exists, so
+   prefer ENHANCEMENT_DENIED whenever in doubt.
 
-4. ADR_NMI (Additional Document Request / Need More Info / query) if:
+4. ENHANCEMENT_DENIED if an enhancement / additional / top-up request was
+   rejected (the previously approved base amount remains intact). Typical
+   signals:
+   - "enhancement request denied" / "enhancement rejected"
+   - "additional amount not payable" / "no further enhancement"
+   - "top-up rejected" / "extension declined"
+   - The email replies to a prior enhancement submission and refuses the
+     extra amount.
+   Use ENHANCEMENT_DENIED (NOT DENIED) whenever the original approval still
+   stands and only the new ask is being refused — the hospital can re-file
+   the enhancement after this status.
+
+5. ADR_NMI (Additional Document Request / Need More Info / query) if:
    - "additional documents required"
    - "please submit documents"
    - "documents required"
@@ -88,7 +107,7 @@ IMPORTANT RULES (VERY STRICT):
    - "discrepancy"
    - Any request for extra documents, additional information, or clarification.
 
-5. If unsure → UNKNOWN
+6. If unsure → UNKNOWN
 
 ---
 
@@ -459,6 +478,7 @@ STATUS_TO_EMAIL_TYPE = {
     "APPROVED": "APPROVAL",
     "PARTIALLY_APPROVED": "PARTIAL_APPROVAL",
     "DENIED": "DENIAL",
+    "ENHANCEMENT_DENIED": "ENHANCEMENT_DENIAL",
     "ADR_NMI": "ADR_NMI",
 }
 

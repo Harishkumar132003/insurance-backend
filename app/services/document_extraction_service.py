@@ -15,9 +15,19 @@ _PROMPT = """
 You are an expert in Indian health insurance claim processing.
 
 From the text below, extract the discrete document names a hospital is
-being asked to provide. Trim each entry. Merge near-duplicates. Use the
-canonical document name (e.g. "Discharge Summary", "Final Bill",
-"Investigation Reports", "Indoor Case Papers").
+being asked to provide.
+
+Rules:
+- Preserve the SPECIFIC document name as written in the email — do NOT
+  generalise it into a broader bucket. Examples:
+    "Endoscopy report"        → "Endoscopy Report"            (NOT "Investigation Reports")
+    "CBC report"              → "CBC Report"                  (NOT "Lab Reports")
+    "X-ray of left knee"      → "X-Ray of Left Knee"          (NOT "Imaging")
+    "discharge summary"       → "Discharge Summary"
+    "first consultation note" → "First Consultation Note"
+- Only normalise capitalisation (Title Case) and trim whitespace.
+- Merge true duplicates only (e.g. "Final bill" and "final-bill" → one entry).
+- Each element must be a single document name as a STRING.
 
 Return STRICT JSON only:
 {{ "documents": ["...", "..."] }}

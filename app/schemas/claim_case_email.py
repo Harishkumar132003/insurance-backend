@@ -77,6 +77,9 @@ class AllClaimCaseEmailListItem(BaseModel):
     ai_suggested_status: str | None = None
     ai_suggested_claim_number: str | None = None
     ai_suggested_amount: float | None = None
+    ai_query_details: str | None = None
+    ai_documents_requested: str | None = None
+    ai_documents_list: list[str] | None = None
     form_values: dict[str, Any] | None = None
     validation_status: str = "PENDING"
     is_latest: bool = False
