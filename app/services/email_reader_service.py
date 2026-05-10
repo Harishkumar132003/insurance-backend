@@ -17,6 +17,7 @@ from app.models.claim_case import ClaimCase
 from app.models.claim_case_email import ClaimCaseEmail
 from app.models.claim_case_email_attachment import ClaimCaseEmailAttachment
 from app.models.policy_provider_config import PolicyProviderConfig
+from app.services.document_extraction_service import extract_documents
 from app.utils.file_storage import save_attachment
 
 logger = logging.getLogger(__name__)
@@ -40,8 +41,16 @@ Return STRICT JSON:
   "summary": "1-2 line summary",
   "query_details": "if ADR_NMI, describe what is being asked or what documents are needed. null otherwise",
   "documents_requested": "if ADR_NMI and specific documents are listed, provide a comma-separated string. null otherwise",
-  "documents_list": ["array of canonical document names being requested. e.g. [\"Discharge Summary\", \"Final Bill\"]. empty array if none."]
+  "documents_list": []
 }}
+
+`documents_list` rules:
+- Only populate when status is ADR_NMI.
+- Each element must be a single canonical document name as a STRING (never an object, never a description).
+- Examples of canonical names: "Discharge Summary", "Final Bill", "Investigation Reports",
+  "Indoor Case Papers", "Operative Notes", "Pharmacy Bills", "Lab Reports", "ICP".
+- Trim each entry. Merge near-duplicates. Do NOT wrap descriptions inside the array.
+- Return [] if status is not ADR_NMI or no specific documents are being asked for.
 
 ---
 
@@ -183,11 +192,32 @@ def _process_single_email(db: Session, email_data: dict):
     documents_list = result.get("documents_list")
     if documents_list is not None and not isinstance(documents_list, list):
         documents_list = None
+    # Coerce list elements to clean strings — the combined prompt sometimes
+    # returns objects or descriptive strings; drop anything that isn't a name.
+    if isinstance(documents_list, list):
+        documents_list = [
+            str(d).strip() for d in documents_list
+            if isinstance(d, (str, int, float)) and str(d).strip()
+        ]
 
     logger.info(f"OpenAI extracted: uhid={uhid}, claim_number={claim_number}, status={extracted_status}")
 
     if extracted_status not in VALID_STATUSES:
         extracted_status = "UNKNOWN"
+
+    # Second pass for ADR_NMI: the combined prompt is unreliable for arrays,
+    # so call the focused extractor on the concatenated source text. Use its
+    # result whenever it returns a non-None list (including the empty list,
+    # which means "model is sure no docs are listed"). Falls through to the
+    # combined-prompt output only when extract_documents fails (e.g. no API
+    # key, OpenAI error).
+    if extracted_status == "ADR_NMI":
+        source_text = " ".join(
+            part for part in (body, query_details, documents_requested) if part
+        )
+        focused = extract_documents(source_text)
+        if focused is not None:
+            documents_list = focused
 
     # 3. If not matched by thread_id, try uhid / claim_number / provider email
     if not claim_case:

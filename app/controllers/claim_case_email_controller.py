@@ -366,6 +366,7 @@ def validate_email_suggestion(
             status=email.ai_suggested_status,
             remarks=base_remarks,
             approved_amount=round_amount,
+            email_id=email.id,
             changed_by="EMAIL_VALIDATED",
             updated_by=user_id,
         ))
@@ -535,23 +536,9 @@ def process_by_provider(
             q.status = "RESOLVED"
             q.resolved_at = datetime.now(timezone.utc)
 
-    base_remarks = remarks or query_details or "Processed by insurance provider"
-    if round_amount is not None:
-        cumulative = float(claim_case.approved_amount or 0)
-        amount_note = f"Approved this round: ₹{round_amount:,.2f} (cumulative: ₹{cumulative:,.2f})"
-        base_remarks = f"{base_remarks} | {amount_note}" if base_remarks else amount_note
-    db.add(StatusHistory(
-        claim_case_id=claim_case.id,
-        stage=claim_case.current_stage,
-        status=new_status,
-        remarks=base_remarks,
-        approved_amount=round_amount,
-        changed_by="PROVIDER_ACTION",
-        updated_by=current_user.id,
-    ))
-
     # Synthetic RECEIVED email so the existing timeline renders this action
     # the same way as an AI-extracted reply from an external provider.
+    # Created BEFORE the StatusHistory so the latter can carry email_id.
     synthetic_email = ClaimCaseEmail(
         claim_case_id=claim_case.id,
         direction="RECEIVED",
@@ -576,6 +563,23 @@ def process_by_provider(
         validated_by=current_user.id,
     )
     db.add(synthetic_email)
+    db.flush()  # synthetic_email.id needed for StatusHistory.email_id and any attachment row
+
+    base_remarks = remarks or query_details or "Processed by insurance provider"
+    if round_amount is not None:
+        cumulative = float(claim_case.approved_amount or 0)
+        amount_note = f"Approved this round: ₹{round_amount:,.2f} (cumulative: ₹{cumulative:,.2f})"
+        base_remarks = f"{base_remarks} | {amount_note}" if base_remarks else amount_note
+    db.add(StatusHistory(
+        claim_case_id=claim_case.id,
+        stage=claim_case.current_stage,
+        status=new_status,
+        remarks=base_remarks,
+        approved_amount=round_amount,
+        email_id=synthetic_email.id,
+        changed_by="PROVIDER_ACTION",
+        updated_by=current_user.id,
+    ))
 
     # Provider-uploaded approval letter (or other supporting file) — only
     # accepted on outcome statuses; ADR_NMI uses documents_list instead.
@@ -584,7 +588,6 @@ def process_by_provider(
         and attachment_filename
         and new_status in ("APPROVED", "PARTIALLY_APPROVED", "DENIED")
     ):
-        db.flush()  # ensure synthetic_email.id is assigned
         stored_filename, file_path = save_attachment(
             claim_case.id, attachment_bytes, attachment_filename
         )

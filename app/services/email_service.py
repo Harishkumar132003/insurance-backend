@@ -5,6 +5,7 @@ from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from email.mime.application import MIMEApplication
 from email.header import decode_header
+from email.utils import make_msgid
 
 from fastapi import HTTPException, status
 
@@ -19,7 +20,9 @@ def send_email(
     body: str,
     attachments: list[tuple[bytes, str, str]] | None = None,
     cc_emails: list[str] | None = None,
-) -> None:
+    in_reply_to: str | None = None,
+    references: list[str] | None = None,
+) -> str:
     """Send an email via the sender's own Gmail SMTP credentials.
 
     Args:
@@ -27,6 +30,16 @@ def send_email(
         from_password: Plaintext Gmail app password for `from_email`.
         attachments:   List of (file_bytes, filename, content_type) tuples.
         cc_emails:     List of CC email addresses.
+        in_reply_to:   Message-ID of the email being replied to (RFC 5322 format,
+                       including angle brackets, e.g. "<abc@host>"). Sets the
+                       In-Reply-To header so Gmail/Outlook thread the reply
+                       under the original message.
+        references:    Ordered list of Message-IDs from the entire thread (root
+                       through previous reply). Sets the References header.
+
+    Returns:
+        The Message-ID assigned to the outgoing email (RFC 5322 format with
+        angle brackets), so the caller can persist it for future threading.
     """
     if not from_email or not from_password:
         raise HTTPException(
@@ -34,12 +47,22 @@ def send_email(
             detail="Sender email credentials are missing",
         )
 
+    # Generate a stable Message-ID using the sender's domain so receiving MTAs
+    # don't flag it as suspicious.
+    domain = from_email.split("@", 1)[1] if "@" in from_email else "oasys.local"
+    message_id = make_msgid(domain=domain)
+
     msg = MIMEMultipart("mixed")
     msg["From"] = from_email
     msg["To"] = to_email
     if cc_emails:
         msg["Cc"] = ", ".join(cc_emails)
     msg["Subject"] = subject
+    msg["Message-ID"] = message_id
+    if in_reply_to:
+        msg["In-Reply-To"] = in_reply_to
+    if references:
+        msg["References"] = " ".join(references)
     msg.attach(MIMEText(body, "html"))
 
     if attachments:
@@ -62,6 +85,8 @@ def send_email(
             status_code=status.HTTP_502_BAD_GATEWAY,
             detail=f"Failed to send email: {str(e)}",
         )
+
+    return message_id
 
 
 def render_form_data_html(form_data, template) -> str:

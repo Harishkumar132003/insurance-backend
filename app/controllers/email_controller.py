@@ -41,6 +41,60 @@ def _resolve_hospital_credentials(db: Session, claim_case: ClaimCase) -> tuple[s
     return hospital.email, password
 
 
+def _resolve_thread_context(
+    db: Session, claim_case_id
+) -> tuple[str | None, list[str], str | None]:
+    """Return (in_reply_to, references, root_subject) for this claim's thread.
+
+    `in_reply_to` is the most recent prior email's Message-ID; `references` is
+    the chronologically ordered list of every Message-ID; `root_subject` is
+    the subject of the very first email sent on this claim. All three are
+    empty/None when this is the first email in the thread.
+
+    Gmail and Outlook thread strictly on the normalised subject (Re:/Fwd:
+    stripped) — In-Reply-To alone isn't enough. Reusing the root subject for
+    every follow-up keeps the conversation in a single thread.
+    """
+    prior = (
+        db.query(ClaimCaseEmail.message_id, ClaimCaseEmail.subject)
+        .filter(
+            ClaimCaseEmail.claim_case_id == claim_case_id,
+            ClaimCaseEmail.message_id.isnot(None),
+        )
+        .order_by(ClaimCaseEmail.created_at.asc())
+        .all()
+    )
+    references = [row[0] for row in prior if row[0]]
+    in_reply_to = references[-1] if references else None
+    root_subject = prior[0][1] if prior else None
+    return in_reply_to, references, root_subject
+
+
+def _strip_reply_prefix(subject: str) -> str:
+    """Strip leading Re:/Fwd:/Fw: tokens (case-insensitive, possibly repeated)."""
+    s = subject.lstrip()
+    while True:
+        lower = s.lower()
+        if lower.startswith("re:"):
+            s = s[3:].lstrip()
+        elif lower.startswith("fwd:"):
+            s = s[4:].lstrip()
+        elif lower.startswith("fw:"):
+            s = s[3:].lstrip()
+        else:
+            return s
+
+
+def _threaded_subject(fallback_subject: str, root_subject: str | None) -> str:
+    """If a prior email exists, reuse its (normalised) subject with a single
+    `Re:` prefix so Gmail / Outlook thread under the original conversation.
+    Otherwise return the fallback subject untouched."""
+    if not root_subject:
+        return fallback_subject
+    base = _strip_reply_prefix(root_subject)
+    return f"Re: {base}"
+
+
 def send_form_email(
     db: Session,
     claim_case_id,
@@ -67,10 +121,13 @@ def send_form_email(
     )
     is_onboarded = bool(provider and provider.is_onboarded)
 
-    # 2. Generate thread_id if not exists and append to subject
+    # 2. Resolve threading headers + subject. First email in the thread uses
+    # the FE-supplied subject; follow-ups reuse the root subject (with Re:)
+    # so Gmail / Outlook keep them in the same conversation.
+    in_reply_to, references, root_subject = _resolve_thread_context(db, claim_case_id)
     if not claim_case.thread_id:
         claim_case.thread_id = uuid.uuid4().hex[:12]
-    subject = f"{subject} [{claim_case.thread_id}]"
+    subject = _threaded_subject(f"{subject} [{claim_case.thread_id}]", root_subject)
 
     # 3. Build attachments list: per-request uploads + claim-case documents
     attachments: list[tuple[bytes, str, str]] = list(uploaded_files or [])
@@ -95,6 +152,7 @@ def send_form_email(
 
     # 4. Send email from the hospital's own mailbox, or skip SMTP for onboarded
     # providers who will review the claim inside OASYS.
+    sent_message_id: str | None = None
     if is_onboarded:
         hospital = (
             db.query(Hospital)
@@ -105,7 +163,7 @@ def send_form_email(
         from_email = hospital.email if hospital and hospital.email else "onboarded@oasys.local"
     else:
         from_email, from_password = _resolve_hospital_credentials(db, claim_case)
-        send_email(
+        sent_message_id = send_email(
             from_email=from_email,
             from_password=from_password,
             to_email=to_email,
@@ -113,22 +171,12 @@ def send_form_email(
             body=content,
             attachments=attachments or None,
             cc_emails=cc_emails or None,
+            in_reply_to=in_reply_to,
+            references=references or None,
         )
 
-    # 5. Update claim_case status to SUBMITTED (initial entry into provider review)
-    claim_case.status = "SUBMITTED"
-    db.add(StatusHistory(
-        claim_case_id=claim_case.id,
-        stage="PRE_AUTH",
-        status="SUBMITTED",
-        remarks=(
-            "Submitted to onboarded provider"
-            if is_onboarded
-            else f"Email sent to {to_email}"
-        ),
-    ))
-
-    # 6. Persist the sent email record
+    # 5. Persist the sent email record first so its id is available to link
+    # against the StatusHistory row created below.
     email_record = ClaimCaseEmail(
         claim_case_id=claim_case.id,
         direction="SENT",
@@ -138,6 +186,7 @@ def send_form_email(
         body=content,
         form_values=form_values,
         thread_id=claim_case.thread_id,
+        message_id=sent_message_id,
         email_type=email_type or "SUBMITTED",
         email_date=datetime.now(timezone.utc),
         is_read=True,
@@ -145,6 +194,20 @@ def send_form_email(
     )
     db.add(email_record)
     db.flush()
+
+    # 6. Update claim_case status to SUBMITTED (initial entry into provider review)
+    claim_case.status = "SUBMITTED"
+    db.add(StatusHistory(
+        claim_case_id=claim_case.id,
+        stage="PRE_AUTH",
+        status="SUBMITTED",
+        email_id=email_record.id,
+        remarks=(
+            "Submitted to onboarded provider"
+            if is_onboarded
+            else f"Email sent to {to_email}"
+        ),
+    ))
 
     # 7. Save attachment records for audit trail
     for file_bytes, filename, content_type in attachments:
@@ -203,7 +266,10 @@ def send_query_email(
     )
     is_onboarded = bool(provider and provider.is_onboarded)
 
-    subject = f"{subject} [{claim_case.thread_id}]"
+    # Look up prior message-ids + root subject on this claim so the outgoing
+    # email threads under the original conversation in Gmail / Outlook.
+    in_reply_to, references, root_subject = _resolve_thread_context(db, claim_case_id)
+    subject = _threaded_subject(f"{subject} [{claim_case.thread_id}]", root_subject)
 
     # Build attachments list: per-request uploads + claim-case documents
     attachments: list[tuple[bytes, str, str]] = list(uploaded_files or [])
@@ -226,6 +292,7 @@ def send_query_email(
             doc.content_type or "application/octet-stream",
         ))
 
+    sent_message_id: str | None = None
     if is_onboarded:
         hospital = (
             db.query(Hospital)
@@ -236,7 +303,7 @@ def send_query_email(
         from_email = hospital.email if hospital and hospital.email else "onboarded@oasys.local"
     else:
         from_email, from_password = _resolve_hospital_credentials(db, claim_case)
-        send_email(
+        sent_message_id = send_email(
             from_email=from_email,
             from_password=from_password,
             to_email=to_email,
@@ -244,6 +311,8 @@ def send_query_email(
             body=content,
             attachments=attachments or None,
             cc_emails=cc_emails or None,
+            in_reply_to=in_reply_to,
+            references=references or None,
         )
 
     # Transition the workflow state based on the current outcome:
@@ -261,17 +330,8 @@ def send_query_email(
         )
     claim_case.status = next_state
 
-    db.add(StatusHistory(
-        claim_case_id=claim_case.id,
-        stage=claim_case.current_stage,
-        status=next_state,
-        remarks=(
-            "Query submitted to onboarded provider"
-            if is_onboarded
-            else f"Query email sent to {to_email}"
-        ),
-    ))
-
+    # Persist the email row first so its id is available to link against the
+    # StatusHistory row.
     email_record = ClaimCaseEmail(
         claim_case_id=claim_case.id,
         direction="SENT",
@@ -281,6 +341,7 @@ def send_query_email(
         body=content,
         form_values=form_values,
         thread_id=claim_case.thread_id,
+        message_id=sent_message_id,
         email_type=email_type or next_state,
         email_date=datetime.now(timezone.utc),
         is_read=True,
@@ -288,6 +349,18 @@ def send_query_email(
     )
     db.add(email_record)
     db.flush()
+
+    db.add(StatusHistory(
+        claim_case_id=claim_case.id,
+        stage=claim_case.current_stage,
+        status=next_state,
+        email_id=email_record.id,
+        remarks=(
+            "Query submitted to onboarded provider"
+            if is_onboarded
+            else f"Query email sent to {to_email}"
+        ),
+    ))
 
     for file_bytes, filename, content_type in attachments:
         stored_filename, file_path = save_attachment(

@@ -16,13 +16,18 @@ class StatusHistory(Base):
     # Amount approved in THIS round only (not cumulative). Set when status is
     # APPROVED or PARTIALLY_APPROVED. Cumulative total lives on claim_cases.approved_amount.
     approved_amount = Column(Numeric(12, 2), nullable=True)
+    # The ClaimCaseEmail row that produced this status change. Null for DRAFT,
+    # manual status updates, and pre-migration history rows.
+    email_id = Column(BigInteger, ForeignKey("claim_case_emails.id"), nullable=True)
     changed_by = Column(String, nullable=True)
     updated_by = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
     claim_case = relationship("ClaimCase", back_populates="status_history")
+    email = relationship("ClaimCaseEmail")
     user = relationship("User")
 
     __table_args__ = (
         Index("ix_status_history_claim_case_id", "claim_case_id"),
+        Index("ix_status_history_email_id", "email_id"),
     )

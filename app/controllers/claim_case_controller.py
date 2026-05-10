@@ -321,12 +321,55 @@ def update_extracted_data(
     if "approved_amount" in payload.model_fields_set:
         claim_case.approved_amount = payload.approved_amount
 
-    # Add status history for audit
+    # ADR-only: hospital reviewer can edit the documents the insurer asked for.
+    # We always persist the edited list onto the email row (replacing the AI
+    # suggestion). If the resulting claim_status is ADR_NMI, also surface it
+    # as an OPEN QueryLog so the downstream ADR-response form can render it
+    # as a checklist.
+    if "documents_list" in payload.model_fields_set:
+        cleaned_docs = [
+            str(d).strip()
+            for d in (payload.documents_list or [])
+            if d is not None and str(d).strip()
+        ]
+        email_record.ai_documents_list = cleaned_docs or None
+
+        is_adr = (
+            (payload.claim_status and payload.claim_status.upper() == "ADR_NMI")
+            or (claim_case.claim_status == "ADR_NMI")
+        )
+        if is_adr:
+            existing_log = (
+                db.query(QueryLog)
+                .filter(
+                    QueryLog.claim_case_id == claim_case.id,
+                    QueryLog.query_type == "ADR_NMI",
+                    QueryLog.status == "OPEN",
+                )
+                .order_by(QueryLog.created_at.desc())
+                .first()
+            )
+            if existing_log:
+                existing_log.documents_list = cleaned_docs
+            else:
+                db.add(QueryLog(
+                    claim_case_id=claim_case.id,
+                    query_type="ADR_NMI",
+                    query_details=email_record.ai_query_details
+                        or email_record.ai_summary
+                        or email_record.body,
+                    documents_requested=email_record.ai_documents_requested,
+                    documents_list=cleaned_docs,
+                    status="OPEN",
+                ))
+
+    # Add status history for audit (link to the inbound email that was edited)
     db.add(StatusHistory(
         claim_case_id=claim_case.id,
         stage=claim_case.current_stage,
         status=payload.claim_status.upper() if payload.claim_status else claim_case.claim_status or "UNKNOWN",
         remarks="Manual edit of AI-extracted data",
+        email_id=email_id,
         changed_by="MANUAL_EDIT",
         updated_by=user_id,
     ))

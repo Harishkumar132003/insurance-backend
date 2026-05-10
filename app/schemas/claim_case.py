@@ -36,6 +36,7 @@ class StatusHistoryItem(BaseModel):
     status: str
     remarks: str | None = None
     approved_amount: float | None = None  # per-round amount (not cumulative)
+    email_id: int | None = None  # FE click → GET /claim-cases/{id}/emails/{email_id}
     changed_by: str | None = None
     updated_by: UUID | None = None
     created_at: datetime
@@ -138,6 +139,11 @@ class ClaimCaseExtractedDataUpdate(BaseModel):
     claim_number: str | None = None
     approved_amount: float | None = None
     email_type: str | None = None
+    # ADR-only: hospital reviewer's edited list of insurer-requested documents.
+    # Persisted as the email's ai_documents_list (replacing the AI suggestion)
+    # AND, when claim_status is ADR_NMI, into an OPEN QueryLog so the
+    # downstream ADR-response form can read it.
+    documents_list: list[str] | None = None
 
 
 class ClaimCaseSubmitForm(BaseModel):
