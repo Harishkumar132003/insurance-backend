@@ -162,6 +162,10 @@ class ClaimListItem(BaseModel):
     claim_case_id: UUID
     uhid: str | None = None
     patient_name: str | None = None
+    age: int | str | None = None
+    gender: str | None = None
+    diagnosis: str | None = None
+    icd_10: str | None = None
     claim_number: str | None = None
     claim_status: str | None = None
     provider_name: str | None = None
@@ -170,6 +174,7 @@ class ClaimListItem(BaseModel):
     approved_amount: float | None = None
     status: str | None = None
     workflow_status: str | None = None
+    unread_count: int = 0
     created_at: datetime
 
     model_config = {"from_attributes": True}

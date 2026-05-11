@@ -20,3 +20,4 @@ from app.models.claim_case_document import ClaimCaseDocument
 from app.models.cc_email import CcEmail
 from app.models.summary_prompt_template import SummaryPromptTemplate
 from app.models.feature import Feature
+from app.models.part_d_letter import PartDLetter

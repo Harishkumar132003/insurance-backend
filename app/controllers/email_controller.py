@@ -129,13 +129,21 @@ def send_form_email(
         claim_case.thread_id = uuid.uuid4().hex[:12]
     subject = _threaded_subject(f"{subject} [{claim_case.thread_id}]", root_subject)
 
-    # 3. Build attachments list: per-request uploads + claim-case documents
+    # 3. Build attachments list: per-request uploads + not-yet-sent claim-case
+    # documents. Documents already attached to a prior email (sent_email_id set)
+    # are skipped so a follow-up email doesn't re-send earlier submissions.
     attachments: list[tuple[bytes, str, str]] = list(uploaded_files or [])
 
-    documents = db.query(ClaimCaseDocument).filter(
-        ClaimCaseDocument.claim_case_id == claim_case_id
-    ).all()
-    for doc in documents:
+    pending_docs = (
+        db.query(ClaimCaseDocument)
+        .filter(
+            ClaimCaseDocument.claim_case_id == claim_case_id,
+            ClaimCaseDocument.sent_email_id.is_(None),
+        )
+        .all()
+    )
+    attached_docs: list[ClaimCaseDocument] = []
+    for doc in pending_docs:
         try:
             file_bytes = read_file(doc.file_path)
         except FileNotFoundError:
@@ -149,6 +157,7 @@ def send_form_email(
             doc.original_filename,
             doc.content_type or "application/octet-stream",
         ))
+        attached_docs.append(doc)
 
     # 4. Send email from the hospital's own mailbox, or skip SMTP for onboarded
     # providers who will review the claim inside OASYS.
@@ -194,6 +203,11 @@ def send_form_email(
     )
     db.add(email_record)
     db.flush()
+
+    # Mark the claim-case documents that went out on this email so they aren't
+    # re-attached to future emails.
+    for doc in attached_docs:
+        doc.sent_email_id = email_record.id
 
     # 6. Update claim_case status to SUBMITTED (initial entry into provider review)
     claim_case.status = "SUBMITTED"
@@ -271,13 +285,21 @@ def send_query_email(
     in_reply_to, references, root_subject = _resolve_thread_context(db, claim_case_id)
     subject = _threaded_subject(f"{subject} [{claim_case.thread_id}]", root_subject)
 
-    # Build attachments list: per-request uploads + claim-case documents
+    # Build attachments list: per-request uploads + not-yet-sent claim-case
+    # documents. Documents already attached to a prior email are skipped so an
+    # ADR / enhancement reply doesn't re-send the original submission's docs.
     attachments: list[tuple[bytes, str, str]] = list(uploaded_files or [])
 
-    documents = db.query(ClaimCaseDocument).filter(
-        ClaimCaseDocument.claim_case_id == claim_case_id
-    ).all()
-    for doc in documents:
+    pending_docs = (
+        db.query(ClaimCaseDocument)
+        .filter(
+            ClaimCaseDocument.claim_case_id == claim_case_id,
+            ClaimCaseDocument.sent_email_id.is_(None),
+        )
+        .all()
+    )
+    attached_docs: list[ClaimCaseDocument] = []
+    for doc in pending_docs:
         try:
             file_bytes = read_file(doc.file_path)
         except FileNotFoundError:
@@ -291,6 +313,7 @@ def send_query_email(
             doc.original_filename,
             doc.content_type or "application/octet-stream",
         ))
+        attached_docs.append(doc)
 
     sent_message_id: str | None = None
     if is_onboarded:
@@ -349,6 +372,11 @@ def send_query_email(
     )
     db.add(email_record)
     db.flush()
+
+    # Mark the claim-case documents that went out on this email so they aren't
+    # re-attached to future emails.
+    for doc in attached_docs:
+        doc.sent_email_id = email_record.id
 
     db.add(StatusHistory(
         claim_case_id=claim_case.id,

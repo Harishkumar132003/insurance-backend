@@ -18,7 +18,13 @@ from app.schemas.claim_case import (
 )
 from app.schemas.claim_case_document import ClaimCaseDocumentResponse
 from app.schemas.claim_case_email import ClaimCaseEmailResponse, ClaimCaseEmailListResponse, PaginatedEmailListResponse, ClaimCaseEmailValidateRequest
-from app.controllers import claim_case_controller, claim_case_email_controller, claim_case_document_controller
+from app.schemas.part_d_letter import PartDLetterResponse, PART_D_FIELD_NAMES
+from app.controllers import (
+    claim_case_controller,
+    claim_case_email_controller,
+    claim_case_document_controller,
+    part_d_letter_controller,
+)
 
 router = APIRouter(prefix="/claim-cases", tags=["Claim Cases"])
 
@@ -147,6 +153,93 @@ async def provider_action(
     )
 
 
+@router.get("/{claim_case_id}/part-d", response_model=PartDLetterResponse)
+def get_part_d(
+    claim_case_id: UUID,
+    email_id: int | None = Query(default=None, description="Approval email id; defaults to the latest approval"),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Prefill source for the Part-D modal. Returns the saved letter for the
+    approval round, or a stub (approved_amount + claim_number from the claim,
+    is_persisted=false) when nothing has been saved yet."""
+    return part_d_letter_controller.get_part_d(db, claim_case_id, email_id, current_user)
+
+
+@router.put("/{claim_case_id}/part-d", response_model=PartDLetterResponse)
+async def put_part_d(
+    claim_case_id: UUID,
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_insurance_provider),
+):
+    """Save the Part-D field values for an approval round. Accepts JSON (just
+    the field values) or multipart/form-data (field values + optional `file`
+    = the rendered PDF + optional `email_id`). Upserts; partial updates OK."""
+    content_type = request.headers.get("content-type", "")
+
+    file_bytes: bytes | None = None
+    file_name: str | None = None
+    file_content_type: str | None = None
+    email_id: int | None = None
+    fields: dict = {}
+
+    if content_type.startswith("multipart/form-data"):
+        form = await request.form()
+        for name in PART_D_FIELD_NAMES:
+            if name in form:
+                fields[name] = form.get(name)
+        raw_email_id = form.get("email_id")
+        if raw_email_id not in (None, ""):
+            try:
+                email_id = int(raw_email_id)
+            except (TypeError, ValueError):
+                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="email_id must be an integer")
+        upload = form.get("file")
+        if upload is not None and hasattr(upload, "read") and getattr(upload, "filename", None):
+            file_bytes = await upload.read()
+            file_name = upload.filename
+            file_content_type = upload.content_type
+    else:
+        try:
+            body = await request.json()
+        except Exception:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Body must be valid JSON or multipart/form-data",
+            )
+        if not isinstance(body, dict):
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="JSON body must be an object")
+        for name in PART_D_FIELD_NAMES:
+            if name in body:
+                fields[name] = body[name]
+        if "email_id" in body and body["email_id"] is not None:
+            try:
+                email_id = int(body["email_id"])
+            except (TypeError, ValueError):
+                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="email_id must be an integer")
+
+    # Coerce approved_amount to float if it came through as a form string.
+    if "approved_amount" in fields and fields["approved_amount"] not in (None, ""):
+        try:
+            fields["approved_amount"] = float(fields["approved_amount"])
+        except (TypeError, ValueError):
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="approved_amount must be a number")
+    elif fields.get("approved_amount") == "":
+        fields["approved_amount"] = None
+
+    return part_d_letter_controller.upsert_part_d(
+        db,
+        claim_case_id,
+        fields,
+        email_id=email_id,
+        attachment_bytes=file_bytes,
+        attachment_filename=file_name,
+        attachment_content_type=file_content_type,
+        current_user=current_user,
+    )
+
+
 @router.get("/emails/all", response_model=PaginatedEmailListResponse)
 def get_all_claim_case_emails(
     page: int = Query(default=1, ge=1, description="Page number"),
@@ -220,7 +313,7 @@ def update_extracted_data(
 def get_claim_case_emails(
     claim_case_id: UUID,
     direction: str | None = Query(default=None, description="Filter by SENT or RECEIVED"),
-    email_type: str | None = Query(default=None, description="Filter by email type: SUBMITTED, ENHANCE_SUBMITTED, RECONSIDER, ADR_SUBMITTED, APPROVAL, PARTIAL_APPROVAL, DENIAL, ENHANCEMENT_DENIAL, ADR_NMI"),
+    email_type: str | None = Query(default=None, description="Filter by email type: SUBMITTED, ENHANCE_SUBMITTED, RECONSIDER, ADR_SUBMITTED, APPROVAL, PARTIAL_APPROVAL, DENIAL, ENHANCEMENT_APPROVAL, ENHANCEMENT_DENIAL, ADR_NMI"),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):

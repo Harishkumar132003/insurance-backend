@@ -22,7 +22,10 @@ from app.utils.file_storage import save_attachment
 
 logger = logging.getLogger(__name__)
 
-VALID_STATUSES = {"APPROVED", "PARTIALLY_APPROVED", "DENIED", "ENHANCEMENT_DENIED", "ADR_NMI", "UNKNOWN"}
+VALID_STATUSES = {
+    "APPROVED", "PARTIALLY_APPROVED", "DENIED",
+    "ENHANCEMENT_APPROVED", "ENHANCEMENT_DENIED", "ADR_NMI", "UNKNOWN",
+}
 
 OPENAI_PROMPT = """
 You are an expert in Indian health insurance claim processing.
@@ -36,8 +39,8 @@ Return STRICT JSON:
 {{
   "claim_number": "string or null",
   "uhid": "string or null",
-  "status": "APPROVED | PARTIALLY_APPROVED | DENIED | ENHANCEMENT_DENIED | ADR_NMI | UNKNOWN",
-  "approved_amount": "number or null — extract the approved/sanctioned amount if status is APPROVED or PARTIALLY_APPROVED",
+  "status": "APPROVED | PARTIALLY_APPROVED | DENIED | ENHANCEMENT_APPROVED | ENHANCEMENT_DENIED | ADR_NMI | UNKNOWN",
+  "approved_amount": "number or null — see the approved_amount rule below",
   "summary": "1-2 line summary",
   "query_details": "if ADR_NMI, describe what is being asked or what documents are needed. null otherwise",
   "documents_requested": "if ADR_NMI and specific documents are listed, provide a comma-separated string. null otherwise",
@@ -52,24 +55,51 @@ Return STRICT JSON:
 - Trim each entry. Merge near-duplicates. Do NOT wrap descriptions inside the array.
 - Return [] if status is not ADR_NMI or no specific documents are being asked for.
 
+`approved_amount` rule:
+- Populate for APPROVED, PARTIALLY_APPROVED, or ENHANCEMENT_APPROVED; null otherwise.
+- For APPROVED / PARTIALLY_APPROVED: the sanctioned / authorized amount in this letter.
+- For ENHANCEMENT_APPROVED: the ENHANCEMENT / ADDITIONAL amount being granted (the
+  delta), NOT the cumulative "Total Authorised" figure. e.g. if the letter says
+  "Enhancement Amount Approved: Rs.10,000" and "Total Cumulative Authorized:
+  Rs.87,200", return 10000 — the backend adds it onto the running total.
+- Plain number only — no commas or currency symbols.
+
 ---
 
 IMPORTANT RULES (VERY STRICT):
 
-1. APPROVED if the full claimed / requested amount is sanctioned and ANY of these appear:
-   - "cashless authorization"
-   - "authorization letter"
-   - "approved amount"
-   - "sanctioned amount"
-   - "claim approved"
-   - "authorization granted"
-   - "extension approved"
-   - "final approval"
+1. APPROVED — use ONLY when ALL of these hold:
+   a. This is the FIRST approval on the thread (no prior authorization /
+      sanctioned amount; not a reply to an earlier approval letter).
+   b. The authorized / sanctioned amount equals the FULL claimed / billed /
+      estimated amount — i.e. NOTHING is being deducted or withheld.
+   c. There is NO co-pay, NO deductible, NO discount, NO sub-limit cap, and
+      NO "non-admissible" deduction reducing the authorized figure.
+   d. Approval language is present ("cashless authorization", "authorization
+      letter", "claim approved", "authorization granted", "final approval", etc.).
+   If the email is replying to a prior authorization (quoted earlier approval,
+   mentions an existing auth/claim number with a sanctioned amount, letter
+   labelled "Enhancement"), use ENHANCEMENT_APPROVED instead — see rule 4.
 
-2. PARTIALLY_APPROVED if approval is granted but the sanctioned / approved amount is
-   clearly LESS than the claimed / requested amount (e.g. claim for 2000, approved 1500).
-   Common phrasing: "partially approved", "approved in part", "sanctioned amount" lower
-   than the claim, explicit deductions reducing the payable amount.
+2. PARTIALLY_APPROVED — use whenever approval IS granted but the authorized /
+   sanctioned amount is LESS than the total bill / claimed / estimated amount,
+   for ANY reason. This is the default for almost every real authorization
+   letter. Triggers (any one is enough):
+   - explicit wording: "partially approved", "approved in part",
+     "approved at X% of estimated cost", "80% approved", "20% co-pay"
+   - a Co-Pay line (percentage or amount) reducing the payable figure
+   - a Deductible, Discount, "Other Deductions", or "non-admissible amount" row
+   - a sub-limit cap (room rent cap, package cap, etc.) cutting the amount
+   - the bottom-line "Total Authorised Amount" being smaller than the
+     "Total Bill Amount" / estimated cost
+   IMPORTANT: a line-item "Status: APPROVED" or the word "APPROVED" inside the
+   letter does NOT make it a full APPROVED. Look at the BOTTOM-LINE numbers:
+   if Total Authorised < Total Bill (e.g. 77,200 authorised out of a 96,500
+   bill with a 20% co-pay), the status is PARTIALLY_APPROVED — even though the
+   letter says "APPROVED" and "cashless authorization". (First approval only;
+   a later partial bump is ENHANCEMENT_APPROVED.)
+   When in doubt between APPROVED and PARTIALLY_APPROVED, choose
+   PARTIALLY_APPROVED.
 
 3. DENIED only if the ENTIRE claim is rejected up-front (no prior approval
    on the thread, no money already sanctioned). Signals:
@@ -84,7 +114,18 @@ IMPORTANT RULES (VERY STRICT):
    DENIED → ENHANCEMENT_DENIED whenever a prior approved amount exists, so
    prefer ENHANCEMENT_DENIED whenever in doubt.
 
-4. ENHANCEMENT_DENIED if an enhancement / additional / top-up request was
+4. ENHANCEMENT_APPROVED if an enhancement / additional / top-up request is
+   APPROVED — extra amount granted on top of a prior authorization. Signals:
+   - "enhancement approved" / "enhancement of Rs.X approved"
+   - "additional authorization" / "additional amount sanctioned"
+   - "extension approved" on an already-authorized claim
+   - letter labelled "Cashless Authorization Letter - Enhancement" / "Enhancement (Approved)"
+   - a reply to a prior auth that grants more money
+   Use ENHANCEMENT_APPROVED (NOT APPROVED) whenever the original approval
+   already stands and this email grants an enhancement. Put the enhancement
+   delta in approved_amount (see the approved_amount rule).
+
+5. ENHANCEMENT_DENIED if an enhancement / additional / top-up request was
    rejected (the previously approved base amount remains intact). Typical
    signals:
    - "enhancement request denied" / "enhancement rejected"
@@ -96,7 +137,7 @@ IMPORTANT RULES (VERY STRICT):
    stands and only the new ask is being refused — the hospital can re-file
    the enhancement after this status.
 
-5. ADR_NMI (Additional Document Request / Need More Info / query) if:
+6. ADR_NMI (Additional Document Request / Need More Info / query) if:
    - "additional documents required"
    - "please submit documents"
    - "documents required"
@@ -107,7 +148,7 @@ IMPORTANT RULES (VERY STRICT):
    - "discrepancy"
    - Any request for extra documents, additional information, or clarification.
 
-6. If unsure → UNKNOWN
+7. If unsure → UNKNOWN
 
 ---
 
@@ -478,6 +519,7 @@ STATUS_TO_EMAIL_TYPE = {
     "APPROVED": "APPROVAL",
     "PARTIALLY_APPROVED": "PARTIAL_APPROVAL",
     "DENIED": "DENIAL",
+    "ENHANCEMENT_APPROVED": "ENHANCEMENT_APPROVAL",
     "ENHANCEMENT_DENIED": "ENHANCEMENT_DENIAL",
     "ADR_NMI": "ADR_NMI",
 }

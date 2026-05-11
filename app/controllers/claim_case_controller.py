@@ -57,9 +57,13 @@ def get_all_claims(
 
     result = []
     for cc in claim_cases:
-        # Extract patient name from the latest form_data
+        # Extract patient + treatment details from the latest form_data
         patient_name = None
         amount = None
+        age = None
+        gender = None
+        diagnosis = None
+        icd_10 = None
         form_data = (
             db.query(FormData)
             .filter(FormData.claim_case_id == cc.id)
@@ -67,11 +71,17 @@ def get_all_claims(
             .first()
         )
         if form_data and form_data.data_json:
-            patient_insured = form_data.data_json.get("patient_insured", {})
+            dj = form_data.data_json
+            patient_insured = dj.get("patient_insured", {}) or {}
             patient_name = patient_insured.get("patient_name")
-            hospitalization = form_data.data_json.get("hospitalization", {})
-            costs = hospitalization.get("costs", {})
+            age = patient_insured.get("age_years") or patient_insured.get("age")
+            gender = patient_insured.get("gender")
+            hospitalization = dj.get("hospitalization", {}) or {}
+            costs = hospitalization.get("costs", {}) or {}
             amount = costs.get("total_cost")
+            treating_doctor = dj.get("treating_doctor", {}) or {}
+            diagnosis = treating_doctor.get("provisional_diagnosis") or treating_doctor.get("diagnosis")
+            icd_10 = treating_doctor.get("icd10_code") or treating_doctor.get("icd_10")
 
         # Get claimed_amount from Claim if it exists
         claim = db.query(Claim).filter(Claim.claim_case_id == cc.id).first()
@@ -91,10 +101,17 @@ def get_all_claims(
                 provider_name = provider.name
                 provider_id_str = provider.provider_id
 
+        # Unread email count (drives the "N new" badge on the list card).
+        unread_count = sum(1 for e in cc.emails if not e.is_read)
+
         result.append({
             "claim_case_id": cc.id,
             "uhid": cc.uhid,
             "patient_name": patient_name,
+            "age": age,
+            "gender": gender,
+            "diagnosis": diagnosis,
+            "icd_10": icd_10,
             "claim_number": cc.claim_number if cc.claim_number and cc.claim_number != "null" else None,
             "claim_status": cc.current_stage,
             "provider_name": provider_name,
@@ -103,6 +120,7 @@ def get_all_claims(
             "approved_amount": float(cc.approved_amount) if cc.approved_amount is not None else None,
             "status": cc.claim_status or cc.status,
             "workflow_status": cc.status,
+            "unread_count": unread_count,
             "created_at": cc.created_at,
         })
 
@@ -220,20 +238,39 @@ def get_claim_case(db: Session, claim_case_id, current_user=None) -> ClaimCase:
 
 # Workflow states on ClaimCase.status
 AWAITING_PROVIDER_STATUSES = {"SUBMITTED", "ENHANCE_SUBMITTED", "RECONSIDER", "ADR_SUBMITTED"}
-OUTCOME_STATUSES = {"APPROVED", "PARTIALLY_APPROVED", "DENIED", "ENHANCEMENT_DENIED", "ADR_NMI"}
+OUTCOME_STATUSES = {
+    "APPROVED", "PARTIALLY_APPROVED", "DENIED",
+    "ENHANCEMENT_APPROVED", "ENHANCEMENT_DENIED", "ADR_NMI",
+}
 VALID_STATUSES = {"DRAFT"} | AWAITING_PROVIDER_STATUSES | OUTCOME_STATUSES | {"UNKNOWN"}
 
 # Map the current outcome to the workflow state we move into when the hospital
 # sends a reply (query / docs) back to the provider. See claim-flow diagram.
-# ENHANCEMENT_DENIED → ENHANCE_SUBMITTED: hospital re-files the enhancement
-# request after a rejection (additional justification / documentation).
+# ENHANCEMENT_APPROVED / ENHANCEMENT_DENIED → ENHANCE_SUBMITTED: the hospital
+# can file (or re-file) an enhancement request from either outcome.
 QUERY_RAISE_STATE = {
     "APPROVED": "ENHANCE_SUBMITTED",
     "PARTIALLY_APPROVED": "ENHANCE_SUBMITTED",
     "DENIED": "RECONSIDER",
+    "ENHANCEMENT_APPROVED": "ENHANCE_SUBMITTED",
     "ENHANCEMENT_DENIED": "ENHANCE_SUBMITTED",
     "ADR_NMI": "ADR_SUBMITTED",
 }
+
+
+# Once a claim has any approved amount on record, the initial APPROVED is the
+# only "APPROVED" — every subsequent approval is an ENHANCEMENT_APPROVED, and
+# every rejection is an ENHANCEMENT_DENIED (the original approval still stands).
+# Helper so the provider-action / validate-suggestion / manual-edit paths all
+# coerce identically.
+def coerce_outcome_for_prior_approval(new_status: str, prior_approved_amount) -> str:
+    if float(prior_approved_amount or 0) <= 0:
+        return new_status
+    if new_status == "APPROVED":
+        return "ENHANCEMENT_APPROVED"
+    if new_status == "DENIED":
+        return "ENHANCEMENT_DENIED"
+    return new_status
 
 
 def update_claim_case_status(
@@ -270,6 +307,7 @@ STATUS_TO_EMAIL_TYPE = {
     "APPROVED": "APPROVAL",
     "PARTIALLY_APPROVED": "PARTIAL_APPROVAL",
     "DENIED": "DENIAL",
+    "ENHANCEMENT_APPROVED": "ENHANCEMENT_APPROVAL",
     "ENHANCEMENT_DENIED": "ENHANCEMENT_DENIAL",
     "ADR_NMI": "ADR_NMI",
 }
@@ -318,10 +356,13 @@ def update_extracted_data(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail=f"Invalid claim_status '{payload.claim_status}'. Must be one of: {', '.join(sorted(VALID_CLAIM_STATUSES))}",
             )
-        # Business rule: once any approved amount exists, a fresh DENIED is
-        # really an enhancement-denial — the original approval still stands.
-        if new_claim_status == "DENIED" and float(claim_case.approved_amount or 0) > 0:
-            new_claim_status = "ENHANCEMENT_DENIED"
+        # Business rule: once any approved amount exists, the initial APPROVED
+        # is the only "APPROVED" — a fresh APPROVED becomes ENHANCEMENT_APPROVED
+        # and a fresh DENIED becomes ENHANCEMENT_DENIED (uses the pre-update
+        # cumulative, which is correct: the new round's delta is added below).
+        new_claim_status = coerce_outcome_for_prior_approval(
+            new_claim_status, claim_case.approved_amount
+        )
         claim_case.claim_status = new_claim_status
 
         # Auto-sync email_type from claim_status only if not explicitly provided
@@ -329,7 +370,10 @@ def update_extracted_data(
             email_record.email_type = STATUS_TO_EMAIL_TYPE[new_claim_status]
 
         # Resolve open query logs on a terminal outcome (approved/partial/denied)
-        if new_claim_status in ("APPROVED", "PARTIALLY_APPROVED", "DENIED", "ENHANCEMENT_DENIED"):
+        if new_claim_status in (
+            "APPROVED", "PARTIALLY_APPROVED", "DENIED",
+            "ENHANCEMENT_APPROVED", "ENHANCEMENT_DENIED",
+        ):
             open_queries = (
                 db.query(QueryLog)
                 .filter(QueryLog.claim_case_id == claim_case.id, QueryLog.status == "OPEN")
@@ -343,29 +387,62 @@ def update_extracted_data(
     if payload.claim_number is not None:
         claim_case.claim_number = payload.claim_number
 
-    # Update approved_amount. Business rule: once a non-zero amount has been
-    # approved, never let it drop back to null/zero — only equal-or-higher
-    # values are accepted. A null in the payload is treated as "leave as-is"
-    # (frontends often resend the full object on every save) so we silently
-    # skip the field; only a numeric value below the existing total is an
-    # actual downgrade attempt and is rejected.
-    if "approved_amount" in payload.model_fields_set:
-        prior = float(claim_case.approved_amount or 0)
-        incoming = payload.approved_amount
-        if incoming is None:
-            if prior == 0:
-                claim_case.approved_amount = None  # nothing was set; allow null
-            # else: keep the existing approved_amount untouched
-        else:
-            if prior > 0 and float(incoming) < prior:
-                raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST,
-                    detail=(
-                        f"approved_amount cannot drop below the existing total "
-                        f"(current: {prior})"
-                    ),
-                )
-            claim_case.approved_amount = incoming
+    # Apply this email's approved amount to the claim's running cumulative,
+    # ONCE per email. `effective_status` is the status after this update
+    # (already coerced above if the caller changed it; otherwise the existing
+    # one). The round amount is the explicit `approved_amount` in the payload
+    # if the caller sent one (a reviewer correction of the AI's figure),
+    # otherwise the email's ai_suggested_amount. `validation_status` is the
+    # "already applied" marker so re-saving the categorize modal doesn't
+    # double-count; a later explicit correction adjusts by the difference.
+    _APPROVAL_STATUSES = ("APPROVED", "PARTIALLY_APPROVED", "ENHANCEMENT_APPROVED")
+    effective_status = claim_case.claim_status
+    # The amount approved in THIS round — recorded on the StatusHistory row
+    # below (mirrors the provider-action / validate-suggestion behaviour).
+    status_history_amount = None
+    explicit_amount_sent = (
+        "approved_amount" in payload.model_fields_set
+        and payload.approved_amount is not None
+    )
+    if explicit_amount_sent:
+        try:
+            explicit_amount = float(payload.approved_amount)
+        except (TypeError, ValueError):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="approved_amount must be a number",
+            )
+        if explicit_amount < 0:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="approved_amount cannot be negative",
+            )
+
+    if effective_status in _APPROVAL_STATUSES:
+        already_applied = email_record.validation_status == "APPROVED"
+        prior_total = float(claim_case.approved_amount or 0)
+        if not already_applied:
+            if explicit_amount_sent:
+                round_amount = explicit_amount
+            elif email_record.ai_suggested_amount is not None:
+                round_amount = float(email_record.ai_suggested_amount)
+            else:
+                round_amount = None
+            if round_amount is not None:
+                claim_case.approved_amount = prior_total + round_amount
+                email_record.ai_suggested_amount = round_amount
+                status_history_amount = round_amount
+            email_record.validation_status = "APPROVED"
+        elif explicit_amount_sent:
+            # Re-editing an already-applied email with a corrected figure —
+            # move the cumulative by the difference, not the whole amount.
+            old_amount = float(email_record.ai_suggested_amount or 0)
+            if explicit_amount != old_amount:
+                claim_case.approved_amount = prior_total + (explicit_amount - old_amount)
+                email_record.ai_suggested_amount = explicit_amount
+            status_history_amount = explicit_amount
+    # Non-approval status (ADR_NMI / DENIED / ENHANCEMENT_DENIED) → no amount
+    # change. An explicit `approved_amount` is ignored in that case.
 
     # ADR-only: hospital reviewer can edit the documents the insurer asked for.
     # We always persist the edited list onto the email row (replacing the AI
@@ -411,12 +488,14 @@ def update_extracted_data(
 
     # Add status history for audit (link to the inbound email that was edited).
     # Reads from claim_case.claim_status, which already reflects the
-    # DENIED → ENHANCEMENT_DENIED coercion above.
+    # DENIED → ENHANCEMENT_DENIED coercion above. approved_amount is the
+    # per-round amount applied in this call (None for non-approval edits).
     db.add(StatusHistory(
         claim_case_id=claim_case.id,
         stage=claim_case.current_stage,
         status=claim_case.claim_status or "UNKNOWN",
         remarks="Manual edit of AI-extracted data",
+        approved_amount=status_history_amount,
         email_id=email_id,
         changed_by="MANUAL_EDIT",
         updated_by=user_id,

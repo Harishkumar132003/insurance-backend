@@ -318,17 +318,25 @@ def validate_email_suggestion(
                 status_code=status.HTTP_404_NOT_FOUND, detail="Claim case not found"
             )
 
+        from app.controllers.claim_case_controller import (
+            coerce_outcome_for_prior_approval,
+            STATUS_TO_EMAIL_TYPE,
+        )
+
         # Apply AI suggestion to claim case. The provider's reply moves the
         # workflow back into the matching outcome state in the flow diagram.
-        # Business rule: once any approved amount exists on the claim, treat
-        # an inbound rejection as an enhancement-denial (the original approval
-        # still stands), not a full DENIED.
-        applied_status = email.ai_suggested_status
-        if applied_status == "DENIED" and float(claim_case.approved_amount or 0) > 0:
-            applied_status = "ENHANCEMENT_DENIED"
+        # Business rule: once any approved amount exists on the claim, the
+        # initial APPROVED is the only "APPROVED" — a fresh APPROVED becomes
+        # ENHANCEMENT_APPROVED and a fresh DENIED becomes ENHANCEMENT_DENIED
+        # (the original approval still stands).
+        applied_status = coerce_outcome_for_prior_approval(
+            email.ai_suggested_status, claim_case.approved_amount
+        )
+        if applied_status != email.ai_suggested_status:
+            # Keep the email row consistent with the coerced decision.
             email.ai_suggested_status = applied_status
-            if email.email_type == "DENIAL":
-                email.email_type = "ENHANCEMENT_DENIAL"
+            if applied_status in STATUS_TO_EMAIL_TYPE:
+                email.email_type = STATUS_TO_EMAIL_TYPE[applied_status]
         claim_case.claim_status = applied_status
         claim_case.status = applied_status
 
@@ -337,7 +345,7 @@ def validate_email_suggestion(
 
         round_amount = None
         if (
-            applied_status in ("APPROVED", "PARTIALLY_APPROVED")
+            applied_status in ("APPROVED", "PARTIALLY_APPROVED", "ENHANCEMENT_APPROVED")
             and email.ai_suggested_amount is not None
         ):
             round_amount = float(email.ai_suggested_amount)
@@ -345,10 +353,10 @@ def validate_email_suggestion(
             claim_case.approved_amount = prior_total + round_amount
 
         # Create QueryLog when provider asks for docs / clarification
-        if email.ai_suggested_status == "ADR_NMI":
+        if applied_status == "ADR_NMI":
             db.add(QueryLog(
                 claim_case_id=claim_case.id,
-                query_type=email.ai_suggested_status,
+                query_type=applied_status,
                 query_details=email.ai_query_details or email.ai_summary,
                 documents_requested=email.ai_documents_requested,
                 documents_list=email.ai_documents_list,
@@ -356,7 +364,10 @@ def validate_email_suggestion(
             ))
 
         # Resolve open QueryLogs on a terminal outcome
-        if email.ai_suggested_status in ("APPROVED", "PARTIALLY_APPROVED", "DENIED", "ENHANCEMENT_DENIED"):
+        if applied_status in (
+            "APPROVED", "PARTIALLY_APPROVED", "DENIED",
+            "ENHANCEMENT_APPROVED", "ENHANCEMENT_DENIED",
+        ):
             open_queries = (
                 db.query(QueryLog)
                 .filter(QueryLog.claim_case_id == claim_case.id, QueryLog.status == "OPEN")
@@ -452,7 +463,10 @@ def get_provider_queue(
     }
 
 
-_PROVIDER_ACTION_STATUSES = {"APPROVED", "PARTIALLY_APPROVED", "DENIED", "ENHANCEMENT_DENIED", "ADR_NMI"}
+_PROVIDER_ACTION_STATUSES = {
+    "APPROVED", "PARTIALLY_APPROVED", "DENIED",
+    "ENHANCEMENT_APPROVED", "ENHANCEMENT_DENIED", "ADR_NMI",
+}
 
 
 def process_by_provider(
@@ -473,6 +487,7 @@ def process_by_provider(
     from app.controllers.claim_case_controller import (
         AWAITING_PROVIDER_STATUSES,
         STATUS_TO_EMAIL_TYPE,
+        coerce_outcome_for_prior_approval,
     )
 
     if new_status not in _PROVIDER_ACTION_STATUSES:
@@ -510,12 +525,12 @@ def process_by_provider(
         if claim_case.hospital_id else None
     )
 
-    # Business rule: once a claim has any approved amount on record, a fresh
-    # rejection is an enhancement-denial (the original approval still stands),
-    # never a full DENIED. Coerce here so the frontend / AI / manual flows all
-    # land at the same answer.
-    if new_status == "DENIED" and float(claim_case.approved_amount or 0) > 0:
-        new_status = "ENHANCEMENT_DENIED"
+    # Business rule: once a claim has any approved amount on record, the initial
+    # APPROVED is the only "APPROVED" — a fresh APPROVED becomes
+    # ENHANCEMENT_APPROVED and a fresh DENIED becomes ENHANCEMENT_DENIED (the
+    # original approval still stands). Coerce against the pre-update cumulative
+    # so the new round's delta is added below.
+    new_status = coerce_outcome_for_prior_approval(new_status, claim_case.approved_amount)
 
     claim_case.claim_status = new_status
     claim_case.status = new_status
@@ -524,7 +539,10 @@ def process_by_provider(
         claim_case.claim_number = claim_number
 
     round_amount = None
-    if new_status in ("APPROVED", "PARTIALLY_APPROVED") and approved_amount is not None:
+    if (
+        new_status in ("APPROVED", "PARTIALLY_APPROVED", "ENHANCEMENT_APPROVED")
+        and approved_amount is not None
+    ):
         round_amount = float(approved_amount)
         prior_total = float(claim_case.approved_amount or 0)
         claim_case.approved_amount = prior_total + round_amount
@@ -545,7 +563,10 @@ def process_by_provider(
     else:
         documents_list = None
 
-    if new_status in ("APPROVED", "PARTIALLY_APPROVED", "DENIED", "ENHANCEMENT_DENIED"):
+    if new_status in (
+        "APPROVED", "PARTIALLY_APPROVED", "DENIED",
+        "ENHANCEMENT_APPROVED", "ENHANCEMENT_DENIED",
+    ):
         open_queries = (
             db.query(QueryLog)
             .filter(QueryLog.claim_case_id == claim_case.id, QueryLog.status == "OPEN")
@@ -554,6 +575,20 @@ def process_by_provider(
         for q in open_queries:
             q.status = "RESOLVED"
             q.resolved_at = datetime.now(timezone.utc)
+
+    # Structured snapshot of what the provider entered, so the timeline's
+    # "View Form" can render the decision form read-only (claim number,
+    # approved amount, remarks, requested documents …).
+    provider_form_values = {
+        "decision": new_status,
+        "claim_number": claim_number or claim_case.claim_number or "",
+        "approved_amount": (round_amount if round_amount is not None else None),
+        "cumulative_approved_amount": float(claim_case.approved_amount or 0),
+        "remarks": remarks or "",
+        "query_details": query_details or "",
+        "documents_requested": documents_requested or "",
+        "documents_list": list(documents_list) if documents_list else [],
+    }
 
     # Synthetic RECEIVED email so the existing timeline renders this action
     # the same way as an AI-extracted reply from an external provider.
@@ -565,6 +600,7 @@ def process_by_provider(
         to_email=(hospital.email if hospital and hospital.email else "hospital@oasys.local"),
         subject=f"Provider decision [{claim_case.thread_id or ''}]".strip(),
         body=remarks or query_details,
+        form_values=provider_form_values,
         thread_id=claim_case.thread_id,
         email_type=STATUS_TO_EMAIL_TYPE.get(new_status),
         email_date=datetime.now(timezone.utc),
@@ -605,7 +641,10 @@ def process_by_provider(
     if (
         attachment_bytes
         and attachment_filename
-        and new_status in ("APPROVED", "PARTIALLY_APPROVED", "DENIED", "ENHANCEMENT_DENIED")
+        and new_status in (
+            "APPROVED", "PARTIALLY_APPROVED", "DENIED",
+            "ENHANCEMENT_APPROVED", "ENHANCEMENT_DENIED",
+        )
     ):
         stored_filename, file_path = save_attachment(
             claim_case.id, attachment_bytes, attachment_filename
@@ -634,10 +673,16 @@ def get_submissions_and_responses(db: Session, claim_case_id) -> dict:
 
     files = []
 
-    # DRAFT files — uploaded directly to the claim, not yet sent
+    # DRAFT files — uploaded directly to the claim, not yet attached to an
+    # email. Once a doc goes out (sent_email_id set) it also exists as a
+    # ClaimCaseEmailAttachment below, so exclude it here to avoid listing it
+    # twice.
     docs = (
         db.query(ClaimCaseDocument)
-        .filter(ClaimCaseDocument.claim_case_id == claim_case_id)
+        .filter(
+            ClaimCaseDocument.claim_case_id == claim_case_id,
+            ClaimCaseDocument.sent_email_id.is_(None),
+        )
         .order_by(ClaimCaseDocument.created_at.asc())
         .all()
     )
