@@ -13,6 +13,7 @@ from typing import Sequence, Union
 
 from alembic import op
 import sqlalchemy as sa
+from sqlalchemy import inspect
 from sqlalchemy.dialects.postgresql import UUID
 
 
@@ -23,6 +24,13 @@ depends_on: Union[str, Sequence[str], None] = None
 
 
 def upgrade() -> None:
+    bind = op.get_bind()
+    inspector = inspect(bind)
+    # Idempotent: a previous interrupted run may have already created the table
+    # without recording the revision. Skip creation if it's already there.
+    if 'part_d_letters' in inspector.get_table_names():
+        return
+
     op.create_table(
         'part_d_letters',
         sa.Column('id', sa.BigInteger, primary_key=True, autoincrement=True),
@@ -56,5 +64,11 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    op.drop_index('ix_part_d_letters_claim_case_id', table_name='part_d_letters')
+    bind = op.get_bind()
+    inspector = inspect(bind)
+    if 'part_d_letters' not in inspector.get_table_names():
+        return
+    existing_indexes = {ix['name'] for ix in inspector.get_indexes('part_d_letters')}
+    if 'ix_part_d_letters_claim_case_id' in existing_indexes:
+        op.drop_index('ix_part_d_letters_claim_case_id', table_name='part_d_letters')
     op.drop_table('part_d_letters')
