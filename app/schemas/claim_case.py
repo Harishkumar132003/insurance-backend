@@ -97,6 +97,11 @@ class ClaimCaseDetailResponse(BaseModel):
     status: str
     claim_status: str | None = None
     approved_amount: float | None = None
+    # Headline status derived from approved_amount vs summary.requested_amount:
+    #   approved < requested → "PARTIALLY_APPROVED"
+    #   approved >= requested (or requested unknown) → "APPROVED"
+    #   no money approved yet → falls back to claim_status / status
+    main_status: str | None = None
     created_at: datetime
     updated_at: datetime | None = None
     summary: ClaimCaseSummary | None = None

@@ -233,6 +233,21 @@ def get_claim_case(db: Session, claim_case_id, current_user=None) -> ClaimCase:
         "requested_amount": requested_amount,
     }
 
+    # Headline status for the FE card. Compared at the claim level: money
+    # approved so far vs the requested/billed amount on the latest form_data.
+    approved = float(claim_case.approved_amount or 0)
+    if approved <= 0:
+        # No money approved yet — surface the most informative status we have.
+        claim_case.main_status = (
+            claim_case.claim_status or claim_case.status or "UNKNOWN"
+        )
+    elif requested_amount is not None and approved < float(requested_amount):
+        claim_case.main_status = "PARTIALLY_APPROVED"
+    else:
+        # approved >= requested, or requested is unknown (no estimate on
+        # form_data) but money was sanctioned → treat as fully approved.
+        claim_case.main_status = "APPROVED"
+
     return claim_case
 
 
