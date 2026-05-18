@@ -3,6 +3,7 @@ from datetime import datetime, timezone
 
 from fastapi import HTTPException, status
 from fastapi.responses import FileResponse
+import sqlalchemy as sa
 from sqlalchemy import func
 from sqlalchemy.orm import Session, joinedload
 
@@ -24,6 +25,8 @@ def get_all_claim_case_emails(
     page_size: int = 20,
     claim_case_id=None,
     policy_provider_id=None,
+    q: str | None = None,
+    provider_filter_id=None,
 ) -> dict:
     # Scope: by policy_provider_id (INSURANCE_PROVIDER user) or by hospital_id.
     if policy_provider_id is not None:
@@ -31,18 +34,48 @@ def get_all_claim_case_emails(
     else:
         scope_filter = ClaimCase.hospital_id == hospital_id
 
+    def apply_filters(query):
+        if claim_case_id:
+            query = query.filter(ClaimCaseEmail.claim_case_id == claim_case_id)
+        # `provider_filter_id` is the hospital-admin-supplied dropdown filter.
+        # For INSURANCE_PROVIDER users `policy_provider_id` already scoped the
+        # rows so the extra clause is redundant but harmless.
+        if provider_filter_id:
+            query = query.filter(ClaimCase.policy_provider_id == provider_filter_id)
+        if q and q.strip():
+            needle = f"%{q.strip()}%"
+            # Match the same patient-name + UHID convention used by /claim-list
+            # (claim_case_controller.get_all_claims). EXISTS on FormData lets us
+            # search without exploding the joined row count.
+            patient_name_match = (
+                sa.exists()
+                .where(FormData.claim_case_id == ClaimCase.id)
+                .where(
+                    FormData.data_json["patient_insured"]["patient_name"]
+                    .astext.ilike(needle)
+                )
+            )
+            query = query.filter(
+                sa.or_(ClaimCase.uhid.ilike(needle), patient_name_match)
+            )
+        return query
+
     # Subquery: latest email id per claim_case
     latest_subq_query = (
         db.query(func.max(ClaimCaseEmail.id).label("max_id"))
         .join(ClaimCase, ClaimCaseEmail.claim_case_id == ClaimCase.id)
         .filter(scope_filter)
     )
-    if claim_case_id:
-        latest_subq_query = latest_subq_query.filter(ClaimCaseEmail.claim_case_id == claim_case_id)
+    latest_subq_query = apply_filters(latest_subq_query)
     latest_subq = latest_subq_query.group_by(ClaimCaseEmail.claim_case_id).subquery()
 
     base_query = (
-        db.query(ClaimCaseEmail, ClaimCase.claim_number, PolicyProviderConfig.is_onboarded)
+        db.query(
+            ClaimCaseEmail,
+            ClaimCase.claim_number,
+            PolicyProviderConfig.is_onboarded,
+            PolicyProviderConfig.name.label("provider_name"),
+        )
         .join(ClaimCase, ClaimCaseEmail.claim_case_id == ClaimCase.id)
         .outerjoin(
             PolicyProviderConfig,
@@ -50,8 +83,7 @@ def get_all_claim_case_emails(
         )
         .filter(scope_filter)
     )
-    if claim_case_id:
-        base_query = base_query.filter(ClaimCaseEmail.claim_case_id == claim_case_id)
+    base_query = apply_filters(base_query)
 
     total = base_query.count()
     total_pages = math.ceil(total / page_size) if total > 0 else 1
@@ -69,13 +101,43 @@ def get_all_claim_case_emails(
     # Collect latest email ids
     latest_ids = {row.max_id for row in db.query(latest_subq.c.max_id).all()}
 
+    # Batch-resolve patient names from the latest FormData per claim case.
+    case_ids = {row.ClaimCaseEmail.claim_case_id for row in rows}
+    patient_name_by_case: dict = {}
+    if case_ids:
+        # Pick the latest FormData per claim case via correlated max(created_at).
+        latest_fd_subq = (
+            db.query(FormData.claim_case_id, func.max(FormData.created_at).label("max_ts"))
+            .filter(FormData.claim_case_id.in_(case_ids))
+            .group_by(FormData.claim_case_id)
+            .subquery()
+        )
+        fd_rows = (
+            db.query(FormData.claim_case_id, FormData.data_json)
+            .join(
+                latest_fd_subq,
+                sa.and_(
+                    FormData.claim_case_id == latest_fd_subq.c.claim_case_id,
+                    FormData.created_at == latest_fd_subq.c.max_ts,
+                ),
+            )
+            .all()
+        )
+        for cc_id, dj in fd_rows:
+            patient_name_by_case[cc_id] = (
+                (dj or {}).get("patient_insured", {}).get("patient_name")
+            )
+
     items = []
-    for email, claim_number, is_onboarded in rows:
+    for row in rows:
+        email = row.ClaimCaseEmail
         items.append({
             "id": email.id,
             "claim_case_id": email.claim_case_id,
-            "claim_number": claim_number,
-            "is_onboard_claim": bool(is_onboarded),
+            "claim_number": row.claim_number,
+            "patient_name": patient_name_by_case.get(email.claim_case_id),
+            "provider_name": row.provider_name,
+            "is_onboard_claim": bool(row.is_onboarded),
             "direction": email.direction,
             "email_type": email.email_type,
             "from_email": email.from_email,

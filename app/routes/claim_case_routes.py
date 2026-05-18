@@ -264,6 +264,8 @@ def get_all_claim_case_emails(
     page: int = Query(default=1, ge=1, description="Page number"),
     page_size: int = Query(default=20, ge=1, le=100, description="Items per page"),
     claim_case_id: UUID | None = Query(default=None, description="Filter by claim case ID"),
+    q: str | None = Query(default=None, description="Search by UHID or patient name (case-insensitive substring)"),
+    provider_id: UUID | None = Query(default=None, description="Filter by policy provider id"),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
@@ -279,6 +281,8 @@ def get_all_claim_case_emails(
         page_size=page_size,
         claim_case_id=claim_case_id,
         policy_provider_id=policy_provider_id,
+        q=q,
+        provider_filter_id=provider_id,
     )
 
 
