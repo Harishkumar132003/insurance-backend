@@ -18,17 +18,33 @@ depends_on: Union[str, Sequence[str], None] = None
 
 
 def upgrade() -> None:
-    op.add_column(
-        'claim_case_documents',
-        sa.Column('document_type', sa.String(), nullable=True),
-    )
-    op.create_index(
-        'ix_claim_case_documents_document_type',
-        'claim_case_documents',
-        ['claim_case_id', 'document_type'],
-    )
+    # Idempotent: on some environments the column was created outside alembic
+    # (an earlier Base.metadata.create_all run) before this migration existed,
+    # so a plain ADD COLUMN would explode with DuplicateColumn. Skip whatever
+    # already matches the desired state and only create what's missing.
+    bind = op.get_bind()
+    insp = sa.inspect(bind)
+    existing_cols = {c['name'] for c in insp.get_columns('claim_case_documents')}
+    if 'document_type' not in existing_cols:
+        op.add_column(
+            'claim_case_documents',
+            sa.Column('document_type', sa.String(), nullable=True),
+        )
+    existing_idx = {i['name'] for i in insp.get_indexes('claim_case_documents')}
+    if 'ix_claim_case_documents_document_type' not in existing_idx:
+        op.create_index(
+            'ix_claim_case_documents_document_type',
+            'claim_case_documents',
+            ['claim_case_id', 'document_type'],
+        )
 
 
 def downgrade() -> None:
-    op.drop_index('ix_claim_case_documents_document_type', table_name='claim_case_documents')
-    op.drop_column('claim_case_documents', 'document_type')
+    bind = op.get_bind()
+    insp = sa.inspect(bind)
+    existing_idx = {i['name'] for i in insp.get_indexes('claim_case_documents')}
+    if 'ix_claim_case_documents_document_type' in existing_idx:
+        op.drop_index('ix_claim_case_documents_document_type', table_name='claim_case_documents')
+    existing_cols = {c['name'] for c in insp.get_columns('claim_case_documents')}
+    if 'document_type' in existing_cols:
+        op.drop_column('claim_case_documents', 'document_type')
