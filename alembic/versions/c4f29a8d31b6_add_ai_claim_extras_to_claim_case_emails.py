@@ -22,16 +22,27 @@ depends_on: Union[str, Sequence[str], None] = None
 
 
 def upgrade() -> None:
-    op.add_column(
-        'claim_case_emails',
-        sa.Column('ai_approved_breakdown', postgresql.JSONB(astext_type=sa.Text()), nullable=True),
-    )
-    op.add_column(
-        'claim_case_emails',
-        sa.Column('ai_denial_reason', sa.Text(), nullable=True),
-    )
+    # Idempotent — columns may already exist from an out-of-band create_all.
+    bind = op.get_bind()
+    insp = sa.inspect(bind)
+    cols = {c['name'] for c in insp.get_columns('claim_case_emails')}
+    if 'ai_approved_breakdown' not in cols:
+        op.add_column(
+            'claim_case_emails',
+            sa.Column('ai_approved_breakdown', postgresql.JSONB(astext_type=sa.Text()), nullable=True),
+        )
+    if 'ai_denial_reason' not in cols:
+        op.add_column(
+            'claim_case_emails',
+            sa.Column('ai_denial_reason', sa.Text(), nullable=True),
+        )
 
 
 def downgrade() -> None:
-    op.drop_column('claim_case_emails', 'ai_denial_reason')
-    op.drop_column('claim_case_emails', 'ai_approved_breakdown')
+    bind = op.get_bind()
+    insp = sa.inspect(bind)
+    cols = {c['name'] for c in insp.get_columns('claim_case_emails')}
+    if 'ai_denial_reason' in cols:
+        op.drop_column('claim_case_emails', 'ai_denial_reason')
+    if 'ai_approved_breakdown' in cols:
+        op.drop_column('claim_case_emails', 'ai_approved_breakdown')
