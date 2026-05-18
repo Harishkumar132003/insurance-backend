@@ -27,6 +27,13 @@ VALID_STATUSES = {
     "ENHANCEMENT_APPROVED", "ENHANCEMENT_DENIED", "ADR_NMI", "UNKNOWN",
 }
 
+# Claim stage (post-treatment cashless claim) has no enhancement loop — the
+# claim is judged on the final bill once. The extractor for claim replies
+# uses this narrower set.
+CLAIM_VALID_STATUSES = {
+    "APPROVED", "PARTIALLY_APPROVED", "DENIED", "ADR_NMI", "UNKNOWN",
+}
+
 OPENAI_PROMPT = """
 You are an expert in Indian health insurance claim processing.
 
@@ -44,7 +51,8 @@ Return STRICT JSON:
   "summary": "1-2 line summary",
   "query_details": "if ADR_NMI, describe what is being asked or what documents are needed. null otherwise",
   "documents_requested": "if ADR_NMI and specific documents are listed, provide a comma-separated string. null otherwise",
-  "documents_list": []
+  "documents_list": [],
+  "denial_reason": "string or null — see the denial_reason rule below"
 }}
 
 `documents_list` rules:
@@ -63,6 +71,13 @@ Return STRICT JSON:
   "Enhancement Amount Approved: Rs.10,000" and "Total Cumulative Authorized:
   Rs.87,200", return 10000 — the backend adds it onto the running total.
 - Plain number only — no commas or currency symbols.
+
+`denial_reason` rule:
+- Populate ONLY when status is DENIED or ENHANCEMENT_DENIED; null for every other status.
+- 1-2 short sentences quoting the insurer's stated rationale. Do not editorialise or paraphrase.
+- Examples: "Treatment falls under policy exclusion clause 4.2 (cosmetic procedures).",
+  "Pre-existing disease not disclosed at policy inception.",
+  "Enhancement not warranted — clinical justification insufficient."
 
 ---
 
@@ -236,8 +251,17 @@ def _process_single_email(db: Session, email_data: dict):
         if claim_case:
             logger.info(f"Matched ClaimCase #{claim_case.id} by thread_id={thread_id}")
 
-    # 2. Call OpenAI to analyze the email
-    result = _analyze_email_with_openai(subject, body, from_email)
+    # 2. Call the right OpenAI extractor based on the matched case's stage.
+    # When we don't yet have a case (thread_id miss → uhid/claim_number
+    # fallback below), we use the pre-auth extractor — it produces uhid /
+    # claim_number which the fallback matcher needs. If that fallback ends up
+    # picking a claim-stage case, _persist_email_record coerces the email_type
+    # to the CLAIM_* equivalent.
+    is_claim_stage = bool(claim_case and claim_case.current_stage == "CLAIM")
+    if is_claim_stage:
+        result = _analyze_claim_email_with_openai(subject, body, from_email)
+    else:
+        result = _analyze_email_with_openai(subject, body, from_email)
     if not result:
         logger.warning(f"Could not analyze email: {subject}")
         return
@@ -252,6 +276,14 @@ def _process_single_email(db: Session, email_data: dict):
     documents_list = result.get("documents_list")
     if documents_list is not None and not isinstance(documents_list, list):
         documents_list = None
+    # Claim-stage only — the pre-auth prompt doesn't emit a breakdown.
+    approved_breakdown = result.get("approved_breakdown") if is_claim_stage else None
+    # denial_reason is emitted by BOTH prompts (DENIED/ENHANCEMENT_DENIED on
+    # pre-auth, DENIED on claim).
+    denial_reason = result.get("denial_reason")
+    approved_breakdown = _sanitize_approved_breakdown(approved_breakdown)
+    if denial_reason is not None and not isinstance(denial_reason, str):
+        denial_reason = None
     # Coerce list elements to clean strings — the combined prompt sometimes
     # returns objects or descriptive strings; drop anything that isn't a name.
     if isinstance(documents_list, list):
@@ -262,7 +294,9 @@ def _process_single_email(db: Session, email_data: dict):
 
     logger.info(f"OpenAI extracted: uhid={uhid}, claim_number={claim_number}, status={extracted_status}")
 
-    if extracted_status not in VALID_STATUSES:
+    # Validate against the right set; claim-stage doesn't allow ENHANCEMENT_*.
+    valid_set = CLAIM_VALID_STATUSES if is_claim_stage else VALID_STATUSES
+    if extracted_status not in valid_set:
         extracted_status = "UNKNOWN"
 
     # Second pass for ADR_NMI: the combined prompt is unreliable for arrays,
@@ -295,6 +329,8 @@ def _process_single_email(db: Session, email_data: dict):
         ai_query_details=query_details,
         ai_documents_requested=documents_requested,
         ai_documents_list=documents_list,
+        ai_approved_breakdown=approved_breakdown,
+        ai_denial_reason=denial_reason,
     )
 
     db.commit()
@@ -327,6 +363,165 @@ def _analyze_email_with_openai(subject: str, body: str, from_email: str) -> dict
         return json.loads(content)
     except (json.JSONDecodeError, Exception) as e:
         logger.error(f"OpenAI analysis failed: {e}")
+        return None
+
+
+# Claim-stage extractor. Sibling of `_analyze_email_with_openai` — same model,
+# same JSON shape, but a prompt that's tuned to claim-settlement vocabulary
+# instead of pre-auth vocabulary. Used only when the matched claim_case has
+# `current_stage == 'CLAIM'`. The pre-auth extractor (above) is unaffected.
+
+CLAIM_OPENAI_PROMPT = """
+You are an expert in Indian health insurance CLAIM SETTLEMENT (not pre-auth).
+
+The hospital has already been treated and discharged; this email is the
+insurer's reply on the final cashless claim (post-treatment bill).
+
+---
+TASK
+Read the email subject, body, and sender, and decide the CURRENT STATUS of
+the claim settlement. Then extract status-specific evidence:
+- APPROVED / PARTIALLY_APPROVED → per-line bill breakdown if quoted
+- ADR_NMI → list of documents the insurer is asking for
+- DENIED → the insurer's stated reason for rejection
+
+Return ONE JSON object with EXACTLY these keys:
+- status: one of APPROVED, PARTIALLY_APPROVED, DENIED, ADR_NMI, UNKNOWN
+- uhid: string or null (patient's UHID — usually pasted from the original mail)
+- claim_number: string or null (insurer's claim reference)
+- approved_amount: number or null (total approved on this settlement, in INR)
+- summary: short plain-text recap, ≤2 sentences
+- query_details: string or null (for ADR_NMI; what the insurer is asking for)
+- documents_requested: string or null (comma-separated; for ADR_NMI)
+- documents_list: array of strings or null (each requested doc as one item)
+- approved_breakdown: array of objects or null. Populate ONLY when status is
+  APPROVED or PARTIALLY_APPROVED and the email quotes per-line figures.
+  Each item must be: {{"label": "<head, e.g. Room rent>", "claimed": <number or null>, "approved": <number>}}.
+  Plain numbers only — no commas / currency symbols. Skip the line entirely
+  if you cannot parse the approved amount. Set null if no breakdown is given.
+- denial_reason: string or null. Populate ONLY when status is DENIED — the
+  insurer's stated reason in 1-2 short sentences (policy exclusion, eligibility,
+  late submission, fraud, etc.). Null for every other status.
+
+---
+STATUS DEFINITIONS (claim stage — there is NO enhancement loop here)
+
+- APPROVED: insurer settles the full claimed amount. Use this only when the
+  email clearly states the entire bill is being paid.
+- PARTIALLY_APPROVED: insurer settles less than the claimed amount; deductions
+  may be itemised, quoted as a total, or expressed as a "settled amount".
+- DENIED: insurer rejects the claim outright (policy exclusion, eligibility,
+  fraud, late submission, etc.). No partial payment.
+- ADR_NMI: insurer asks for additional documents or clarification before
+  settling (e.g. "send original bills", "send discharge summary", "share
+  investigation reports").
+- UNKNOWN: the email is not clearly any of the above (acknowledgement,
+  out-of-office reply, etc.).
+
+Do NOT output ENHANCEMENT_APPROVED or ENHANCEMENT_DENIED — those belong to
+the pre-auth stage and do not apply to claim settlement.
+
+---
+EXTRACTION RULES (strict)
+
+approved_breakdown:
+- Walk the email body for a settlement table or itemised list. Typical heads:
+  "Room rent / nursing", "ICU", "Surgery / Operation theatre", "Anaesthesia",
+  "Doctor / consultant fees", "Investigations / lab", "Pharmacy / medicines /
+  consumables", "Implants", "Radiology", "Miscellaneous".
+- Use the labels as written by the insurer. Normalise capitalisation but do
+  not rename. If the email writes "OT Charges", emit "OT Charges".
+- `claimed` is the hospital's billed amount for that line if quoted (often
+  shown alongside the settled amount). Set null if not quoted.
+- `approved` is the settled / payable amount for that line. Required.
+- Skip "Deduction" / "Co-pay" / "Disallowed" rows — those are derived. Only
+  emit positive payable rows.
+- If only a single grand total is quoted (no per-line break-up), set
+  approved_breakdown to null. Do NOT fabricate a single-row breakdown from
+  the total.
+
+documents_list (ADR_NMI):
+- Each element a canonical document NAME as a string, never a description.
+  Examples: "Discharge Summary", "Final Bill", "Pharmacy Bills",
+  "Investigation Reports", "Operative Notes", "Indoor Case Papers", "Implant
+  Sticker", "Death Summary", "MLC Report".
+- Trim whitespace, merge near-duplicates, no objects, no descriptions.
+- Return [] if no specific docs are listed.
+
+denial_reason:
+- 1-2 short sentences quoting the insurer's stated rationale. Do not editorialise.
+- Examples: "Treatment falls under policy exclusion clause 4.2 (cosmetic
+  procedures).", "Claim submitted after the 30-day window.", "Pre-existing
+  disease not disclosed at policy inception.".
+
+---
+INPUTS
+
+Email from: {from_email}
+Email subject: {subject}
+
+Email body:
+{body}
+
+Return ONLY valid JSON, no other text.
+""".strip()
+
+
+def _sanitize_approved_breakdown(raw) -> list[dict] | None:
+    """Coerce AI-emitted approved_breakdown into the canonical
+    [{label, claimed, approved}] shape. Drop rows that don't have a usable
+    numeric approved value. Return None when nothing usable is present."""
+    if not isinstance(raw, list) or not raw:
+        return None
+    cleaned: list[dict] = []
+    for item in raw:
+        if not isinstance(item, dict):
+            continue
+        label = item.get("label")
+        if not isinstance(label, str) or not label.strip():
+            continue
+        approved = item.get("approved")
+        try:
+            approved_num = float(approved) if approved is not None else None
+        except (TypeError, ValueError):
+            approved_num = None
+        if approved_num is None:
+            continue
+        claimed = item.get("claimed")
+        try:
+            claimed_num = float(claimed) if claimed is not None else None
+        except (TypeError, ValueError):
+            claimed_num = None
+        cleaned.append({
+            "label": label.strip(),
+            "claimed": claimed_num,
+            "approved": approved_num,
+        })
+    return cleaned or None
+
+
+def _analyze_claim_email_with_openai(subject: str, body: str, from_email: str) -> dict | None:
+    """Claim-stage sibling of `_analyze_email_with_openai`. Same model, same
+    parsing path; different prompt and a narrower VALID_STATUSES set."""
+    prompt = CLAIM_OPENAI_PROMPT.format(
+        subject=subject, from_email=from_email, body=body[:10000],
+    )
+    try:
+        client = OpenAI(api_key=settings.OPENAI_API_KEY)
+        response = client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0,
+        )
+        content = response.choices[0].message.content.strip()
+        if content.startswith("```"):
+            content = content.split("\n", 1)[1] if "\n" in content else content[3:]
+            if content.endswith("```"):
+                content = content[:-3]
+            content = content.strip()
+        return json.loads(content)
+    except (json.JSONDecodeError, Exception) as e:
+        logger.error(f"OpenAI claim analysis failed: {e}")
         return None
 
 
@@ -524,8 +719,16 @@ STATUS_TO_EMAIL_TYPE = {
     "ADR_NMI": "ADR_NMI",
 }
 
-# Claims that are waiting on a provider response (so inbound emails can match).
-AWAITING_PROVIDER_STATUSES = ("SUBMITTED", "ENHANCE_SUBMITTED", "RECONSIDER", "ADR_SUBMITTED")
+# Claims that are waiting on a provider response — inbound emails can only
+# match against cases in one of these workflow states. Sourced from the
+# central definition in claim_case_controller so claim-stage statuses
+# (CLAIM_SUBMITTED / CLAIM_ADR_SUBMITTED / CLAIM_RECONSIDER) are picked up
+# automatically without drift.
+from app.controllers.claim_case_controller import (
+    AWAITING_PROVIDER_STATUSES as _AWAITING_SET,
+    CLAIM_STATUS_TO_EMAIL_TYPE,
+)
+AWAITING_PROVIDER_STATUSES = tuple(_AWAITING_SET)
 
 
 def _persist_email_record(
@@ -534,6 +737,8 @@ def _persist_email_record(
     ai_suggested_claim_number: str | None = None, ai_summary: str | None = None,
     ai_query_details: str | None = None, ai_documents_requested: str | None = None,
     ai_documents_list: list[str] | None = None,
+    ai_approved_breakdown: list[dict] | None = None,
+    ai_denial_reason: str | None = None,
 ):
     """Persist a received email and its attachments with AI suggestions to the database."""
     message_id = email_data.get("message_id", "")
@@ -547,7 +752,19 @@ def _persist_email_record(
             logger.info(f"Email already stored (message_id={message_id}), skipping persistence")
             return
 
-    email_type = STATUS_TO_EMAIL_TYPE.get(extracted_status) if extracted_status else None
+    # Stage-aware email_type. On a claim-stage case, even if the pre-auth
+    # extractor ran (uhid/claim_number fallback path), we map the status to
+    # the CLAIM_* email_type so the timeline reads correctly. Coerce dead
+    # enhancement statuses on claim stage — there is no enhancement loop.
+    if claim_case.current_stage == "CLAIM":
+        status_for_map = extracted_status
+        if status_for_map == "ENHANCEMENT_APPROVED":
+            status_for_map = "APPROVED"
+        elif status_for_map == "ENHANCEMENT_DENIED":
+            status_for_map = "DENIED"
+        email_type = CLAIM_STATUS_TO_EMAIL_TYPE.get(status_for_map) if status_for_map else None
+    else:
+        email_type = STATUS_TO_EMAIL_TYPE.get(extracted_status) if extracted_status else None
 
     email_record = ClaimCaseEmail(
         claim_case_id=claim_case.id,
@@ -567,6 +784,8 @@ def _persist_email_record(
         ai_query_details=ai_query_details,
         ai_documents_requested=ai_documents_requested,
         ai_documents_list=ai_documents_list,
+        ai_approved_breakdown=ai_approved_breakdown,
+        ai_denial_reason=ai_denial_reason,
         validation_status="PENDING",
     )
     db.add(email_record)

@@ -40,6 +40,18 @@ def _run_migrations():
         "ALTER TABLE policy_provider_configs ADD COLUMN IF NOT EXISTS email VARCHAR",
         "ALTER TABLE claim_case_emails ADD COLUMN IF NOT EXISTS email_type VARCHAR",
         "ALTER TABLE claim_cases ADD COLUMN IF NOT EXISTS approved_amount NUMERIC(12,2)",
+        "ALTER TABLE claim_case_documents ADD COLUMN IF NOT EXISTS document_type VARCHAR",
+        # Allow Part-D drafts (pre-approval). One UNIQUE per approval-bound
+        # row; one UNIQUE per draft (claim_case_id where email_id IS NULL).
+        "ALTER TABLE part_d_letters ALTER COLUMN claim_case_email_id DROP NOT NULL",
+        "ALTER TABLE part_d_letters DROP CONSTRAINT IF EXISTS uq_part_d_letter_email",
+        "DROP INDEX IF EXISTS uq_part_d_letter_email",
+        "CREATE UNIQUE INDEX IF NOT EXISTS uq_part_d_letter_email "
+        "ON part_d_letters (claim_case_email_id) "
+        "WHERE claim_case_email_id IS NOT NULL",
+        "CREATE UNIQUE INDEX IF NOT EXISTS uq_part_d_letter_draft "
+        "ON part_d_letters (claim_case_id) "
+        "WHERE claim_case_email_id IS NULL",
     ]
     with engine.connect() as conn:
         for stmt in alter_statements:

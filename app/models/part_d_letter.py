@@ -1,4 +1,4 @@
-from sqlalchemy import Column, BigInteger, Numeric, String, Text, DateTime, ForeignKey, Index, UniqueConstraint, func
+from sqlalchemy import Column, BigInteger, Numeric, String, Text, DateTime, ForeignKey, Index, func, text
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import relationship
 
@@ -18,7 +18,10 @@ class PartDLetter(Base):
 
     id = Column(BigInteger, primary_key=True, autoincrement=True)
     claim_case_id = Column(UUID(as_uuid=True), ForeignKey("claim_cases.id"), nullable=False)
-    claim_case_email_id = Column(BigInteger, ForeignKey("claim_case_emails.id"), nullable=False)
+    # Nullable: the provider can save a Part-D draft before any approval round
+    # exists. When the provider eventually approves, process_by_provider links
+    # the draft to the newly-created approval email by setting this column.
+    claim_case_email_id = Column(BigInteger, ForeignKey("claim_case_emails.id"), nullable=True)
     # The rendered PDF, attached to the approval email; set on first print/download.
     attachment_id = Column(BigInteger, ForeignKey("claim_case_email_attachments.id"), nullable=True)
 
@@ -53,6 +56,20 @@ class PartDLetter(Base):
     attachment = relationship("ClaimCaseEmailAttachment")
 
     __table_args__ = (
-        UniqueConstraint("claim_case_email_id", name="uq_part_d_letter_email"),
+        # Two partial unique indexes (Postgres) so that:
+        # - At most one Part-D row per approval email (post-approval letter), AND
+        # - At most one draft per claim_case (pre-approval).
+        Index(
+            "uq_part_d_letter_email",
+            "claim_case_email_id",
+            unique=True,
+            postgresql_where=text("claim_case_email_id IS NOT NULL"),
+        ),
+        Index(
+            "uq_part_d_letter_draft",
+            "claim_case_id",
+            unique=True,
+            postgresql_where=text("claim_case_email_id IS NULL"),
+        ),
         Index("ix_part_d_letters_claim_case_id", "claim_case_id"),
     )

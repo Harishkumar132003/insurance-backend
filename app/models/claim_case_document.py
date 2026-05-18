@@ -18,6 +18,7 @@ class ClaimCaseDocument(Base):
     # The outbound email this document was attached to. NULL = uploaded but not
     # yet sent — prevents re-attaching it to later emails on the same claim.
     sent_email_id = Column(BigInteger, ForeignKey("claim_case_emails.id"), nullable=True)
+    document_type = Column(String, nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
     claim_case = relationship("ClaimCase", back_populates="documents")
@@ -26,4 +27,5 @@ class ClaimCaseDocument(Base):
     __table_args__ = (
         Index("ix_claim_case_documents_claim_case_id", "claim_case_id"),
         Index("ix_claim_case_documents_sent_email_id", "sent_email_id"),
+        Index("ix_claim_case_documents_document_type", "claim_case_id", "document_type"),
     )

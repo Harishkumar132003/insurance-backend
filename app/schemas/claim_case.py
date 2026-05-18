@@ -115,6 +115,11 @@ class ClaimCaseDetailResponse(BaseModel):
     policy_provider_email: str | None = None
     is_onboarded: bool = False
     cc_emails: list[str] = []
+    has_claim: bool = False
+    # Snapshot of the Claim row when a claim has been raised on this case. Used
+    # by the pre-auth detail page so it can display claim totals without making
+    # a separate /claim request.
+    claim_summary: dict | None = None
 
     model_config = {"from_attributes": True}
 
@@ -149,6 +154,10 @@ class ClaimCaseExtractedDataUpdate(BaseModel):
     # AND, when claim_status is ADR_NMI, into an OPEN QueryLog so the
     # downstream ADR-response form can read it.
     documents_list: list[str] | None = None
+    # Denial-only: hospital reviewer's edited insurer-stated reason. When
+    # present, lands in StatusHistory.remarks instead of the default
+    # "Manual edit of AI-extracted data" marker.
+    remarks: str | None = None
 
 
 class ClaimCaseSubmitForm(BaseModel):

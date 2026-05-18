@@ -15,7 +15,13 @@ from app.models.claim_case_email_attachment import ClaimCaseEmailAttachment
 from app.models.hospital import Hospital
 from app.models.policy_provider_config import PolicyProviderConfig
 from app.models.status_history import StatusHistory
-from app.controllers.claim_case_controller import QUERY_RAISE_STATE
+from app.controllers.claim_case_controller import (
+    QUERY_RAISE_STATE,
+    CLAIM_QUERY_RAISE_STATE,
+    CLAIM_REPLY_TO_CLAIM_STATUS,
+    CLAIM_REPLY_EMAIL_TYPE,
+)
+from app.models.claim import Claim
 from app.services.email_service import send_email, fetch_inbox
 from app.utils.file_storage import save_attachment, read_file
 
@@ -338,23 +344,49 @@ def send_query_email(
             references=references or None,
         )
 
-    # Transition the workflow state based on the current outcome:
-    #   APPROVED / PARTIALLY_APPROVED -> ENHANCE_SUBMITTED
-    #   DENIED                        -> RECONSIDER
-    #   ADR_NMI                       -> ADR_SUBMITTED
-    next_state = QUERY_RAISE_STATE.get(claim_case.claim_status)
-    if not next_state:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=(
-                f"Cannot raise query from claim_status '{claim_case.claim_status}'. "
-                f"Must be one of: {', '.join(sorted(QUERY_RAISE_STATE))}"
-            ),
-        )
+    # Transition the workflow state. Claim-stage replies are driven off the
+    # current workflow status (CLAIM_ADR_NMI / CLAIM_DENIED) — they bypass the
+    # pre-auth QUERY_RAISE_STATE table so the pre-auth outcome on the row
+    # (`claim_case.claim_status`) is preserved.
+    is_claim_stage = claim_case.current_stage == "CLAIM"
+    claim_row = None
+    if is_claim_stage:
+        next_state = CLAIM_QUERY_RAISE_STATE.get(claim_case.status)
+        if not next_state:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=(
+                    f"Cannot raise claim reply from status '{claim_case.status}'. "
+                    f"Must be one of: {', '.join(sorted(CLAIM_QUERY_RAISE_STATE))}"
+                ),
+            )
+        claim_row = db.query(Claim).filter(Claim.claim_case_id == claim_case.id).first()
+        if not claim_row:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="No claim has been raised on this case",
+            )
+        # Update the Claim row's own state to match the new in-stage workflow.
+        claim_row.status = CLAIM_REPLY_TO_CLAIM_STATUS[next_state]
+    else:
+        # Pre-auth: APPROVED / PARTIALLY_APPROVED -> ENHANCE_SUBMITTED,
+        #          DENIED -> RECONSIDER, ADR_NMI -> ADR_SUBMITTED.
+        next_state = QUERY_RAISE_STATE.get(claim_case.claim_status)
+        if not next_state:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=(
+                    f"Cannot raise query from claim_status '{claim_case.claim_status}'. "
+                    f"Must be one of: {', '.join(sorted(QUERY_RAISE_STATE))}"
+                ),
+            )
     claim_case.status = next_state
 
     # Persist the email row first so its id is available to link against the
     # StatusHistory row.
+    resolved_email_type = email_type or (
+        CLAIM_REPLY_EMAIL_TYPE.get(next_state) if is_claim_stage else None
+    ) or next_state
     email_record = ClaimCaseEmail(
         claim_case_id=claim_case.id,
         direction="SENT",
@@ -365,7 +397,7 @@ def send_query_email(
         form_values=form_values,
         thread_id=claim_case.thread_id,
         message_id=sent_message_id,
-        email_type=email_type or next_state,
+        email_type=resolved_email_type,
         email_date=datetime.now(timezone.utc),
         is_read=True,
         provider_read=not is_onboarded,

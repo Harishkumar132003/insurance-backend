@@ -10,6 +10,11 @@ class ClaimCaseDocumentResponse(BaseModel):
     original_filename: str
     content_type: str | None = None
     file_size: int | None = None
+    document_type: str | None = None
     created_at: datetime
 
     model_config = {"from_attributes": True}
+
+
+class DocumentsFromEmailRequest(BaseModel):
+    attachment_ids: list[int]

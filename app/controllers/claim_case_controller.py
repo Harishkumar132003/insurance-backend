@@ -22,6 +22,7 @@ def get_all_claims(
     provider_id: UUID | None = None,
     policy_provider_id: UUID | None = None,
     q: str | None = None,
+    stage: str | None = None,
 ) -> list[dict]:
     query = db.query(ClaimCase)
     if policy_provider_id is not None:
@@ -35,6 +36,9 @@ def get_all_claims(
 
     if provider_id:
         query = query.filter(ClaimCase.policy_provider_id == provider_id)
+
+    if stage:
+        query = query.filter(ClaimCase.current_stage == stage)
 
     # Search: matches UHID directly OR a patient_name on any FormData row for
     # this claim (form_data.data_json -> patient_insured -> patient_name).
@@ -57,7 +61,11 @@ def get_all_claims(
 
     result = []
     for cc in claim_cases:
-        # Extract patient + treatment details from the latest form_data
+        # Extract patient + treatment details from the latest PRE_AUTH form_data.
+        # The claim raise inserts a separate form_data row tagged stage='CLAIM'
+        # that only holds the bill breakdown — it must be excluded here so the
+        # list keeps showing patient / diagnosis / requested amount from the
+        # original pre-auth submission.
         patient_name = None
         amount = None
         age = None
@@ -67,6 +75,11 @@ def get_all_claims(
         form_data = (
             db.query(FormData)
             .filter(FormData.claim_case_id == cc.id)
+            .filter(sa.or_(
+                FormData.data_json.is_(None),
+                FormData.data_json["stage"].astext.is_(None),
+                FormData.data_json["stage"].astext != "CLAIM",
+            ))
             .order_by(FormData.created_at.desc())
             .first()
         )
@@ -202,9 +215,18 @@ def get_claim_case(db: Session, claim_case_id, current_user=None) -> ClaimCase:
 
     # Build summary from the latest form_data (key names vary across templates,
     # so search the JSON recursively for the first matching field).
+    # Claim raise inserts a FormData row tagged stage='CLAIM' holding the bill
+    # breakdown — it has no requested_amount / total_cost fields. The patient /
+    # diagnosis / requested-amount summary on this endpoint is about the
+    # PRE_AUTH form, so skip claim-stage form_data rows when picking the latest.
     latest_form = (
         db.query(FormData)
         .filter(FormData.claim_case_id == claim_case.id)
+        .filter(sa.or_(
+            FormData.data_json.is_(None),
+            FormData.data_json["stage"].astext.is_(None),
+            FormData.data_json["stage"].astext != "CLAIM",
+        ))
         .order_by(FormData.created_at.desc())
         .first()
     )
@@ -217,6 +239,22 @@ def get_claim_case(db: Session, claim_case_id, current_user=None) -> ClaimCase:
         requested_amount = float(requested_amount) if requested_amount is not None else None
     except (TypeError, ValueError):
         requested_amount = None
+
+    # Flag whether a Claim row has been raised against this case so the FE can
+    # toggle the "Raise Claim" vs "View Claim" CTA without a separate request.
+    # When one exists, attach a small summary so the detail page can display
+    # claim totals without round-tripping to /claim.
+    existing_claim = db.query(Claim).filter(Claim.claim_case_id == claim_case.id).first()
+    claim_case.has_claim = existing_claim is not None
+    claim_case.claim_summary = (
+        {
+            "claimed_amount": float(existing_claim.claimed_amount) if existing_claim.claimed_amount is not None else None,
+            "approved_amount": float(existing_claim.approved_amount) if existing_claim.approved_amount is not None else None,
+            "status": existing_claim.status,
+        }
+        if existing_claim
+        else None
+    )
 
     claim_case.summary = {
         "patient_name": _find_first_value(data, {"patient_name", "name"}),
@@ -252,7 +290,10 @@ def get_claim_case(db: Session, claim_case_id, current_user=None) -> ClaimCase:
 
 
 # Workflow states on ClaimCase.status
-AWAITING_PROVIDER_STATUSES = {"SUBMITTED", "ENHANCE_SUBMITTED", "RECONSIDER", "ADR_SUBMITTED"}
+AWAITING_PROVIDER_STATUSES = {
+    "SUBMITTED", "ENHANCE_SUBMITTED", "RECONSIDER", "ADR_SUBMITTED",
+    "CLAIM_SUBMITTED", "CLAIM_ADR_SUBMITTED", "CLAIM_RECONSIDER",
+}
 OUTCOME_STATUSES = {
     "APPROVED", "PARTIALLY_APPROVED", "DENIED",
     "ENHANCEMENT_APPROVED", "ENHANCEMENT_DENIED", "ADR_NMI",
@@ -270,6 +311,25 @@ QUERY_RAISE_STATE = {
     "ENHANCEMENT_APPROVED": "ENHANCE_SUBMITTED",
     "ENHANCEMENT_DENIED": "ENHANCE_SUBMITTED",
     "ADR_NMI": "ADR_SUBMITTED",
+}
+
+# Claim-stage equivalent: when the hospital replies on a claim, the current
+# workflow status on the case (CLAIM_ADR_NMI / CLAIM_DENIED) maps to a new
+# workflow status that hands the ball back to the provider.
+CLAIM_QUERY_RAISE_STATE = {
+    "CLAIM_ADR_NMI": "CLAIM_ADR_SUBMITTED",
+    "CLAIM_DENIED": "CLAIM_RECONSIDER",
+}
+# Maps the new workflow state to the un-prefixed status we write on the
+# `claims` table (Claim's own state).
+CLAIM_REPLY_TO_CLAIM_STATUS = {
+    "CLAIM_ADR_SUBMITTED": "ADR_SUBMITTED",
+    "CLAIM_RECONSIDER": "RECONSIDER",
+}
+# Email type for the outgoing email row when the hospital replies on a claim.
+CLAIM_REPLY_EMAIL_TYPE = {
+    "CLAIM_ADR_SUBMITTED": "CLAIM_ADR_SUBMITTED",
+    "CLAIM_RECONSIDER": "CLAIM_RECONSIDER",
 }
 
 
@@ -327,6 +387,23 @@ STATUS_TO_EMAIL_TYPE = {
     "ADR_NMI": "ADR_NMI",
 }
 
+# Same set of provider outcomes, but applied to a CLAIM-stage case.
+# `claims.status` keeps the un-prefixed value (the claim's own state). The
+# claim_case workflow status gets a CLAIM_-prefix so the same row doesn't
+# collide with pre-auth states.
+CLAIM_STATUS_TO_EMAIL_TYPE = {
+    "APPROVED": "CLAIM_APPROVAL",
+    "PARTIALLY_APPROVED": "CLAIM_PARTIAL_APPROVAL",
+    "DENIED": "CLAIM_DENIAL",
+    "ADR_NMI": "CLAIM_ADR_NMI",
+}
+CLAIM_OUTCOME_TO_CASE_STATUS = {
+    "APPROVED": "CLAIM_APPROVED",
+    "PARTIALLY_APPROVED": "CLAIM_PARTIALLY_APPROVED",
+    "DENIED": "CLAIM_DENIED",
+    "ADR_NMI": "CLAIM_ADR_NMI",
+}
+
 
 def update_extracted_data(
     db: Session,
@@ -359,36 +436,69 @@ def update_extracted_data(
     # Mark email as read
     email_record.is_read = True
 
-    # Update email_type: explicit value takes priority, otherwise auto-derive from claim_status
+    is_claim_stage = claim_case.current_stage == "CLAIM"
+
+    # Update email_type: explicit value takes priority, otherwise auto-derive
+    # from claim_status (mapping picked below based on stage).
     if payload.email_type is not None:
         email_record.email_type = payload.email_type.upper()
 
-    # Update claim_status
+    # `applied_status` is the bare, post-coercion outcome (APPROVED /
+    # PARTIALLY_APPROVED / DENIED / ENHANCEMENT_* / ADR_NMI / UNKNOWN). It
+    # flows through every downstream block. On claim stage we coerce
+    # ENHANCEMENT_* → bare (no enhancement loop). On pre-auth we run the
+    # existing "prior approved → next becomes ENHANCEMENT" coercion.
+    applied_status: str | None = None
     if payload.claim_status is not None:
-        new_claim_status = payload.claim_status.upper()
-        if new_claim_status not in VALID_CLAIM_STATUSES:
+        candidate = payload.claim_status.upper()
+        if candidate not in VALID_CLAIM_STATUSES:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail=f"Invalid claim_status '{payload.claim_status}'. Must be one of: {', '.join(sorted(VALID_CLAIM_STATUSES))}",
             )
-        # Business rule: once any approved amount exists, the initial APPROVED
-        # is the only "APPROVED" — a fresh APPROVED becomes ENHANCEMENT_APPROVED
-        # and a fresh DENIED becomes ENHANCEMENT_DENIED (uses the pre-update
-        # cumulative, which is correct: the new round's delta is added below).
-        new_claim_status = coerce_outcome_for_prior_approval(
-            new_claim_status, claim_case.approved_amount
-        )
-        claim_case.claim_status = new_claim_status
 
-        # Auto-sync email_type from claim_status only if not explicitly provided
-        if payload.email_type is None and new_claim_status in STATUS_TO_EMAIL_TYPE:
-            email_record.email_type = STATUS_TO_EMAIL_TYPE[new_claim_status]
+        if is_claim_stage:
+            # Claim has no enhancement loop. Coerce defensively in case the
+            # FE / AI emits one.
+            if candidate == "ENHANCEMENT_APPROVED":
+                candidate = "APPROVED"
+            elif candidate == "ENHANCEMENT_DENIED":
+                candidate = "DENIED"
+            if candidate != "UNKNOWN" and candidate not in CLAIM_OUTCOME_TO_CASE_STATUS:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=f"Status '{candidate}' is not supported on claim stage",
+                )
+        else:
+            # Pre-auth: existing business rule — once any approved amount
+            # exists, fresh APPROVED becomes ENHANCEMENT_APPROVED, fresh DENIED
+            # becomes ENHANCEMENT_DENIED.
+            candidate = coerce_outcome_for_prior_approval(
+                candidate, claim_case.approved_amount
+            )
 
-        # Resolve open query logs on a terminal outcome (approved/partial/denied)
-        if new_claim_status in (
-            "APPROVED", "PARTIALLY_APPROVED", "DENIED",
-            "ENHANCEMENT_APPROVED", "ENHANCEMENT_DENIED",
-        ):
+        applied_status = candidate
+
+        # Write to the right column.
+        if is_claim_stage:
+            if applied_status != "UNKNOWN":
+                claim_case.status = CLAIM_OUTCOME_TO_CASE_STATUS[applied_status]
+            # Do NOT touch claim_case.claim_status / .approved_amount — those
+            # are pre-auth state.
+        else:
+            claim_case.claim_status = applied_status
+
+        # Auto-sync email_type from claim_status only if not explicitly provided.
+        type_map = CLAIM_STATUS_TO_EMAIL_TYPE if is_claim_stage else STATUS_TO_EMAIL_TYPE
+        if payload.email_type is None and applied_status in type_map:
+            email_record.email_type = type_map[applied_status]
+
+        # Resolve open query logs on a terminal outcome (approved/partial/denied).
+        # Pre-auth includes enhancement terminals too.
+        terminal_outcomes = {"APPROVED", "PARTIALLY_APPROVED", "DENIED"}
+        if not is_claim_stage:
+            terminal_outcomes |= {"ENHANCEMENT_APPROVED", "ENHANCEMENT_DENIED"}
+        if applied_status in terminal_outcomes:
             open_queries = (
                 db.query(QueryLog)
                 .filter(QueryLog.claim_case_id == claim_case.id, QueryLog.status == "OPEN")
@@ -398,20 +508,25 @@ def update_extracted_data(
                 q.status = "RESOLVED"
                 q.resolved_at = datetime.now(timezone.utc)
 
-    # Update claim_number
+    # Update claim_number. On claim stage we also mirror onto the claims row.
     if payload.claim_number is not None:
         claim_case.claim_number = payload.claim_number
 
-    # Apply this email's approved amount to the claim's running cumulative,
-    # ONCE per email. `effective_status` is the status after this update
-    # (already coerced above if the caller changed it; otherwise the existing
-    # one). The round amount is the explicit `approved_amount` in the payload
-    # if the caller sent one (a reviewer correction of the AI's figure),
-    # otherwise the email's ai_suggested_amount. `validation_status` is the
-    # "already applied" marker so re-saving the categorize modal doesn't
-    # double-count; a later explicit correction adjusts by the difference.
-    _APPROVAL_STATUSES = ("APPROVED", "PARTIALLY_APPROVED", "ENHANCEMENT_APPROVED")
-    effective_status = claim_case.claim_status
+    # `effective_status` is the bare outcome we should reason about for the
+    # amount-handling block — newly applied if the caller changed it, else the
+    # last known status on whichever column owns it for this stage.
+    if applied_status is not None:
+        effective_status = applied_status
+    elif is_claim_stage:
+        # Reverse-map claim_case.status (CLAIM_*) back to the bare form.
+        effective_status = None
+        for bare, prefixed in CLAIM_OUTCOME_TO_CASE_STATUS.items():
+            if claim_case.status == prefixed:
+                effective_status = bare
+                break
+    else:
+        effective_status = claim_case.claim_status
+
     # The amount approved in THIS round — recorded on the StatusHistory row
     # below (mirrors the provider-action / validate-suggestion behaviour).
     status_history_amount = None
@@ -419,6 +534,7 @@ def update_extracted_data(
         "approved_amount" in payload.model_fields_set
         and payload.approved_amount is not None
     )
+    explicit_amount = None
     if explicit_amount_sent:
         try:
             explicit_amount = float(payload.approved_amount)
@@ -433,37 +549,82 @@ def update_extracted_data(
                 detail="approved_amount cannot be negative",
             )
 
-    if effective_status in _APPROVAL_STATUSES:
+    _APPROVAL_STATUSES = ("APPROVED", "PARTIALLY_APPROVED", "ENHANCEMENT_APPROVED")
+    if is_claim_stage:
+        # Claim stage: settlement is single-shot. Write to the `claims` row
+        # (status / approved_amount / processed_at). Leave claim_case pre-auth
+        # totals untouched. `validation_status` on the email guards against
+        # re-applying the same row twice.
         already_applied = email_record.validation_status == "APPROVED"
-        prior_total = float(claim_case.approved_amount or 0)
-        if not already_applied:
-            if explicit_amount_sent:
-                round_amount = explicit_amount
-            elif email_record.ai_suggested_amount is not None:
-                round_amount = float(email_record.ai_suggested_amount)
-            else:
-                round_amount = None
-            if round_amount is not None:
-                claim_case.approved_amount = prior_total + round_amount
-                email_record.ai_suggested_amount = round_amount
-                status_history_amount = round_amount
-            email_record.validation_status = "APPROVED"
-        elif explicit_amount_sent:
-            # Re-editing an already-applied email with a corrected figure —
-            # move the cumulative by the difference, not the whole amount.
-            old_amount = float(email_record.ai_suggested_amount or 0)
-            if explicit_amount != old_amount:
-                claim_case.approved_amount = prior_total + (explicit_amount - old_amount)
+        claim_row = (
+            db.query(Claim).filter(Claim.claim_case_id == claim_case.id).first()
+        )
+
+        if applied_status in ("APPROVED", "PARTIALLY_APPROVED", "DENIED"):
+            if not claim_row:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Claim row missing for this claim case",
+                )
+            claim_row.status = applied_status
+            if claim_row.processed_at is None:
+                claim_row.processed_at = datetime.now(timezone.utc)
+            if payload.claim_number is not None:
+                claim_row.claim_number = payload.claim_number
+
+        if effective_status in ("APPROVED", "PARTIALLY_APPROVED"):
+            if not already_applied:
+                if explicit_amount_sent:
+                    round_amount = explicit_amount
+                elif email_record.ai_suggested_amount is not None:
+                    round_amount = float(email_record.ai_suggested_amount)
+                else:
+                    round_amount = None
+                if round_amount is not None and claim_row is not None:
+                    claim_row.approved_amount = round_amount  # set, not cumulate
+                    email_record.ai_suggested_amount = round_amount
+                    status_history_amount = round_amount
+                email_record.validation_status = "APPROVED"
+            elif explicit_amount_sent and claim_row is not None:
+                # Reviewer correction on an already-applied row → overwrite.
+                claim_row.approved_amount = explicit_amount
                 email_record.ai_suggested_amount = explicit_amount
-            status_history_amount = explicit_amount
-    # Non-approval status (ADR_NMI / DENIED / ENHANCEMENT_DENIED) → no amount
-    # change. An explicit `approved_amount` is ignored in that case.
+                status_history_amount = explicit_amount
+        elif effective_status == "DENIED" and not already_applied:
+            email_record.validation_status = "APPROVED"
+    else:
+        # Pre-auth path — existing cumulative semantics, untouched.
+        if effective_status in _APPROVAL_STATUSES:
+            already_applied = email_record.validation_status == "APPROVED"
+            prior_total = float(claim_case.approved_amount or 0)
+            if not already_applied:
+                if explicit_amount_sent:
+                    round_amount = explicit_amount
+                elif email_record.ai_suggested_amount is not None:
+                    round_amount = float(email_record.ai_suggested_amount)
+                else:
+                    round_amount = None
+                if round_amount is not None:
+                    claim_case.approved_amount = prior_total + round_amount
+                    email_record.ai_suggested_amount = round_amount
+                    status_history_amount = round_amount
+                email_record.validation_status = "APPROVED"
+            elif explicit_amount_sent:
+                # Re-editing an already-applied email with a corrected figure —
+                # move the cumulative by the difference, not the whole amount.
+                old_amount = float(email_record.ai_suggested_amount or 0)
+                if explicit_amount != old_amount:
+                    claim_case.approved_amount = prior_total + (explicit_amount - old_amount)
+                    email_record.ai_suggested_amount = explicit_amount
+                status_history_amount = explicit_amount
+        # Non-approval status (ADR_NMI / DENIED / ENHANCEMENT_DENIED) → no
+        # amount change. An explicit `approved_amount` is ignored in that case.
 
     # ADR-only: hospital reviewer can edit the documents the insurer asked for.
     # We always persist the edited list onto the email row (replacing the AI
-    # suggestion). If the resulting claim_status is ADR_NMI, also surface it
-    # as an OPEN QueryLog so the downstream ADR-response form can render it
-    # as a checklist.
+    # suggestion). If the resulting status is ADR_NMI, also surface it as an
+    # OPEN QueryLog so the downstream ADR-response form can render it as a
+    # checklist. Works for both stages — uses `applied_status` / effective.
     if "documents_list" in payload.model_fields_set:
         cleaned_docs = [
             str(d).strip()
@@ -472,10 +633,7 @@ def update_extracted_data(
         ]
         email_record.ai_documents_list = cleaned_docs or None
 
-        is_adr = (
-            (payload.claim_status and payload.claim_status.upper() == "ADR_NMI")
-            or (claim_case.claim_status == "ADR_NMI")
-        )
+        is_adr = (effective_status == "ADR_NMI")
         if is_adr:
             existing_log = (
                 db.query(QueryLog)
@@ -502,14 +660,16 @@ def update_extracted_data(
                 ))
 
     # Add status history for audit (link to the inbound email that was edited).
-    # Reads from claim_case.claim_status, which already reflects the
-    # DENIED → ENHANCEMENT_DENIED coercion above. approved_amount is the
-    # per-round amount applied in this call (None for non-approval edits).
+    # `status` is the bare outcome (matches what the provider-action and
+    # validate-suggestion paths record). `stage` reflects current_stage so
+    # claim-stage edits land on a CLAIM row in history.
+    history_status = applied_status or effective_status or "UNKNOWN"
+    user_remark = payload.remarks.strip() if payload.remarks and payload.remarks.strip() else None
     db.add(StatusHistory(
         claim_case_id=claim_case.id,
         stage=claim_case.current_stage,
-        status=claim_case.claim_status or "UNKNOWN",
-        remarks="Manual edit of AI-extracted data",
+        status=history_status,
+        remarks=user_remark or "Manual edit of AI-extracted data",
         approved_amount=status_history_amount,
         email_id=email_id,
         changed_by="MANUAL_EDIT",

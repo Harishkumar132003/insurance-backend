@@ -7,6 +7,7 @@ from sqlalchemy.orm import Session
 from app.db.session import get_db
 from app.core.deps import get_current_user, require_insurance_provider
 from app.models.user import User
+from app.schemas.claim import ClaimCreate, ClaimResponse
 from app.schemas.claim_case import (
     ClaimCaseResponse,
     ClaimCaseDetailResponse,
@@ -16,7 +17,7 @@ from app.schemas.claim_case import (
     ClaimListItem,
     PaginatedProviderQueueResponse,
 )
-from app.schemas.claim_case_document import ClaimCaseDocumentResponse
+from app.schemas.claim_case_document import ClaimCaseDocumentResponse, DocumentsFromEmailRequest
 from app.schemas.claim_case_email import ClaimCaseEmailResponse, ClaimCaseEmailListResponse, PaginatedEmailListResponse, ClaimCaseEmailValidateRequest
 from app.schemas.part_d_letter import PartDLetterResponse, PART_D_FIELD_NAMES
 from app.controllers import (
@@ -25,6 +26,7 @@ from app.controllers import (
     claim_case_document_controller,
     part_d_letter_controller,
 )
+from app.controllers import claim_controller
 
 router = APIRouter(prefix="/claim-cases", tags=["Claim Cases"])
 
@@ -34,6 +36,7 @@ def get_all_claims(
     exclude_draft: bool = Query(default=False, description="Exclude claims with DRAFT status"),
     provider_id: UUID | None = Query(default=None, description="Filter by policy provider ID"),
     q: str | None = Query(default=None, description="Search by UHID or patient name (case-insensitive substring match)"),
+    stage: str | None = Query(default=None, description="Filter by current_stage: PRE_AUTH or CLAIM"),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
@@ -49,6 +52,7 @@ def get_all_claims(
         provider_id=provider_id,
         policy_provider_id=policy_provider_id,
         q=q,
+        stage=stage,
     )
 
 
@@ -85,6 +89,7 @@ async def provider_action(
     file_name: str | None = None
     file_content_type: str | None = None
 
+    approved_breakdown = None
     if content_type.startswith("multipart/form-data"):
         form = await request.form()
         new_status = form.get("status")
@@ -99,6 +104,16 @@ async def provider_action(
             file_bytes = await upload.read()
             file_name = upload.filename
             file_content_type = upload.content_type
+        # Itemized claim approval: per-line breakdown sent as a JSON string.
+        approved_breakdown_raw = form.get("approved_breakdown")
+        if approved_breakdown_raw:
+            try:
+                import json as _json
+                parsed = _json.loads(approved_breakdown_raw)
+                if isinstance(parsed, list):
+                    approved_breakdown = parsed
+            except (ValueError, TypeError):
+                approved_breakdown = None
     else:
         try:
             body = await request.json()
@@ -119,6 +134,9 @@ async def provider_action(
         query_details = body.get("query_details")
         documents_requested = body.get("documents_requested")
         documents_list = body.get("documents_list")
+        bd = body.get("approved_breakdown")
+        if isinstance(bd, list):
+            approved_breakdown = bd
 
     if not new_status:
         raise HTTPException(
@@ -150,6 +168,7 @@ async def provider_action(
         attachment_bytes=file_bytes,
         attachment_filename=file_name,
         attachment_content_type=file_content_type,
+        approved_breakdown=approved_breakdown,
     )
 
 
@@ -394,10 +413,13 @@ def view_email_attachment(
 async def upload_documents(
     claim_case_id: UUID,
     files: List[UploadFile] = File(...),
+    document_type: str | None = Form(default=None),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    return claim_case_document_controller.upload_documents(db, claim_case_id, files)
+    return claim_case_document_controller.upload_documents(
+        db, claim_case_id, files, document_type=document_type
+    )
 
 
 @router.get("/{claim_case_id}/documents", response_model=list[ClaimCaseDocumentResponse])
@@ -407,6 +429,22 @@ def list_documents(
     current_user: User = Depends(get_current_user),
 ):
     return claim_case_document_controller.list_documents(db, claim_case_id)
+
+
+@router.post(
+    "/{claim_case_id}/documents/from-email",
+    response_model=list[ClaimCaseDocumentResponse],
+    status_code=201,
+)
+def attach_documents_from_email(
+    claim_case_id: UUID,
+    payload: DocumentsFromEmailRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    return claim_case_document_controller.attach_from_email(
+        db, claim_case_id, payload.attachment_ids
+    )
 
 
 @router.delete("/{claim_case_id}/documents/{document_id}", status_code=204)
@@ -437,3 +475,30 @@ def view_document(
     current_user: User = Depends(get_current_user),
 ):
     return claim_case_document_controller.view_document(db, claim_case_id, document_id)
+
+
+# ── Claim (post-approval bill submission) endpoints ──
+
+
+@router.post("/{claim_case_id}/claim", response_model=ClaimResponse, status_code=201)
+def raise_claim(
+    claim_case_id: UUID,
+    payload: ClaimCreate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    if current_user.role != "HOSPITAL_ADMIN":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only hospital admins can raise claims",
+        )
+    return claim_controller.raise_claim(db, claim_case_id, payload, current_user)
+
+
+@router.get("/{claim_case_id}/claim", response_model=ClaimResponse)
+def get_claim(
+    claim_case_id: UUID,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    return claim_controller.get_claim(db, claim_case_id, current_user)

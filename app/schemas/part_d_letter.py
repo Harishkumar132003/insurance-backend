@@ -36,7 +36,8 @@ PART_D_FIELD_NAMES: tuple[str, ...] = tuple(PartDLetterFields.model_fields.keys(
 class PartDLetterResponse(PartDLetterFields):
     id: int | None = None
     claim_case_id: UUID
-    claim_case_email_id: int
+    # Nullable: draft Part-Ds (saved before any approval round) have no email.
+    claim_case_email_id: int | None = None
     attachment_id: int | None = None
     created_at: datetime | None = None
     updated_at: datetime | None = None

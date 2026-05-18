@@ -90,6 +90,8 @@ def get_all_claim_case_emails(
             "ai_query_details": email.ai_query_details,
             "ai_documents_requested": email.ai_documents_requested,
             "ai_documents_list": email.ai_documents_list,
+            "ai_approved_breakdown": email.ai_approved_breakdown,
+            "ai_denial_reason": email.ai_denial_reason,
             "form_values": email.form_values,
             "validation_status": email.validation_status,
             "is_latest": email.id in latest_ids,
@@ -321,38 +323,84 @@ def validate_email_suggestion(
         from app.controllers.claim_case_controller import (
             coerce_outcome_for_prior_approval,
             STATUS_TO_EMAIL_TYPE,
+            CLAIM_STATUS_TO_EMAIL_TYPE,
+            CLAIM_OUTCOME_TO_CASE_STATUS,
         )
 
-        # Apply AI suggestion to claim case. The provider's reply moves the
-        # workflow back into the matching outcome state in the flow diagram.
-        # Business rule: once any approved amount exists on the claim, the
-        # initial APPROVED is the only "APPROVED" — a fresh APPROVED becomes
-        # ENHANCEMENT_APPROVED and a fresh DENIED becomes ENHANCEMENT_DENIED
-        # (the original approval still stands).
-        applied_status = coerce_outcome_for_prior_approval(
-            email.ai_suggested_status, claim_case.approved_amount
-        )
-        if applied_status != email.ai_suggested_status:
-            # Keep the email row consistent with the coerced decision.
-            email.ai_suggested_status = applied_status
-            if applied_status in STATUS_TO_EMAIL_TYPE:
-                email.email_type = STATUS_TO_EMAIL_TYPE[applied_status]
-        claim_case.claim_status = applied_status
-        claim_case.status = applied_status
-
-        if email.ai_suggested_claim_number and not claim_case.claim_number:
-            claim_case.claim_number = email.ai_suggested_claim_number
-
+        is_claim_stage = claim_case.current_stage == "CLAIM"
         round_amount = None
-        if (
-            applied_status in ("APPROVED", "PARTIALLY_APPROVED", "ENHANCEMENT_APPROVED")
-            and email.ai_suggested_amount is not None
-        ):
-            round_amount = float(email.ai_suggested_amount)
-            prior_total = float(claim_case.approved_amount or 0)
-            claim_case.approved_amount = prior_total + round_amount
 
-        # Create QueryLog when provider asks for docs / clarification
+        if is_claim_stage:
+            # Claim-stage decision: write to the `claims` row, leave the
+            # pre-auth columns on claim_case alone. There's no enhancement
+            # loop; coerce ENHANCEMENT_* to plain APPROVED / DENIED.
+            from app.models.claim import Claim as ClaimModel
+            applied_status = email.ai_suggested_status
+            if applied_status == "ENHANCEMENT_APPROVED":
+                applied_status = "APPROVED"
+            elif applied_status == "ENHANCEMENT_DENIED":
+                applied_status = "DENIED"
+            if applied_status not in CLAIM_OUTCOME_TO_CASE_STATUS:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=f"AI status {applied_status} is not supported on claim stage",
+                )
+            claim_row = (
+                db.query(ClaimModel).filter(ClaimModel.claim_case_id == claim_case.id).first()
+            )
+            if not claim_row:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="No claim has been raised on this case",
+                )
+
+            # Keep the email row consistent with the (possibly coerced) decision
+            # so the timeline + View Form modal align.
+            email.ai_suggested_status = applied_status
+            if applied_status in CLAIM_STATUS_TO_EMAIL_TYPE:
+                email.email_type = CLAIM_STATUS_TO_EMAIL_TYPE[applied_status]
+
+            claim_row.status = applied_status
+            if (
+                applied_status in ("APPROVED", "PARTIALLY_APPROVED")
+                and email.ai_suggested_amount is not None
+            ):
+                claim_row.approved_amount = float(email.ai_suggested_amount)
+                round_amount = float(email.ai_suggested_amount)
+            if applied_status in ("APPROVED", "PARTIALLY_APPROVED", "DENIED"):
+                claim_row.processed_at = datetime.now(timezone.utc)
+
+            claim_case.status = CLAIM_OUTCOME_TO_CASE_STATUS[applied_status]
+            # Do NOT touch claim_case.claim_status or claim_case.approved_amount
+            # — those hold the pre-auth outcome and must stay intact.
+
+            if email.ai_suggested_claim_number and not claim_case.claim_number:
+                claim_case.claim_number = email.ai_suggested_claim_number
+
+        else:
+            # Pre-auth path — unchanged.
+            applied_status = coerce_outcome_for_prior_approval(
+                email.ai_suggested_status, claim_case.approved_amount
+            )
+            if applied_status != email.ai_suggested_status:
+                email.ai_suggested_status = applied_status
+                if applied_status in STATUS_TO_EMAIL_TYPE:
+                    email.email_type = STATUS_TO_EMAIL_TYPE[applied_status]
+            claim_case.claim_status = applied_status
+            claim_case.status = applied_status
+
+            if email.ai_suggested_claim_number and not claim_case.claim_number:
+                claim_case.claim_number = email.ai_suggested_claim_number
+
+            if (
+                applied_status in ("APPROVED", "PARTIALLY_APPROVED", "ENHANCEMENT_APPROVED")
+                and email.ai_suggested_amount is not None
+            ):
+                round_amount = float(email.ai_suggested_amount)
+                prior_total = float(claim_case.approved_amount or 0)
+                claim_case.approved_amount = prior_total + round_amount
+
+        # Create QueryLog when provider asks for docs / clarification (both stages)
         if applied_status == "ADR_NMI":
             db.add(QueryLog(
                 claim_case_id=claim_case.id,
@@ -363,7 +411,7 @@ def validate_email_suggestion(
                 status="OPEN",
             ))
 
-        # Resolve open QueryLogs on a terminal outcome
+        # Resolve open QueryLogs on a terminal outcome (both stages)
         if applied_status in (
             "APPROVED", "PARTIALLY_APPROVED", "DENIED",
             "ENHANCEMENT_APPROVED", "ENHANCEMENT_DENIED",
@@ -377,16 +425,20 @@ def validate_email_suggestion(
                 q.status = "RESOLVED"
                 q.resolved_at = datetime.now(timezone.utc)
 
-        # Create StatusHistory
+        # Create StatusHistory — stage is read off claim_case.current_stage,
+        # which already reflects PRE_AUTH or CLAIM correctly.
         base_remarks = remarks or email.ai_summary or "AI suggestion approved by user"
         if round_amount is not None:
-            cumulative = float(claim_case.approved_amount or 0)
+            if is_claim_stage:
+                cumulative = float(claim_row.approved_amount or 0)
+            else:
+                cumulative = float(claim_case.approved_amount or 0)
             amount_note = f"Approved this round: ₹{round_amount:,.2f} (cumulative: ₹{cumulative:,.2f})"
             base_remarks = f"{base_remarks} | {amount_note}" if base_remarks else amount_note
         db.add(StatusHistory(
             claim_case_id=claim_case.id,
             stage=claim_case.current_stage,
-            status=email.ai_suggested_status,
+            status=applied_status,
             remarks=base_remarks,
             approved_amount=round_amount,
             email_id=email.id,
@@ -483,12 +535,16 @@ def process_by_provider(
     attachment_bytes: bytes | None = None,
     attachment_filename: str | None = None,
     attachment_content_type: str | None = None,
+    approved_breakdown: list[dict] | None = None,
 ):
     from app.controllers.claim_case_controller import (
         AWAITING_PROVIDER_STATUSES,
         STATUS_TO_EMAIL_TYPE,
+        CLAIM_STATUS_TO_EMAIL_TYPE,
+        CLAIM_OUTCOME_TO_CASE_STATUS,
         coerce_outcome_for_prior_approval,
     )
+    from app.models.claim import Claim
 
     if new_status not in _PROVIDER_ACTION_STATUSES:
         raise HTTPException(
@@ -525,27 +581,51 @@ def process_by_provider(
         if claim_case.hospital_id else None
     )
 
-    # Business rule: once a claim has any approved amount on record, the initial
-    # APPROVED is the only "APPROVED" — a fresh APPROVED becomes
-    # ENHANCEMENT_APPROVED and a fresh DENIED becomes ENHANCEMENT_DENIED (the
-    # original approval still stands). Coerce against the pre-update cumulative
-    # so the new round's delta is added below.
-    new_status = coerce_outcome_for_prior_approval(new_status, claim_case.approved_amount)
+    is_claim_stage = claim_case.current_stage == "CLAIM"
 
-    claim_case.claim_status = new_status
-    claim_case.status = new_status
+    if is_claim_stage:
+        # Claim outcomes don't follow the pre-auth "second approval becomes
+        # enhancement" rule — they're judged on the claim alone. The pre-auth
+        # outcome on the row (`claim_case.claim_status` / `approved_amount`)
+        # is preserved as-is.
+        if new_status not in CLAIM_OUTCOME_TO_CASE_STATUS:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Provider action {new_status} not supported on claim stage yet",
+            )
+        claim = db.query(Claim).filter(Claim.claim_case_id == claim_case.id).first()
+        if not claim:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="No claim has been raised on this case",
+            )
+        claim.status = new_status
+        if new_status in ("APPROVED", "PARTIALLY_APPROVED") and approved_amount is not None:
+            claim.approved_amount = float(approved_amount)
+        if new_status in ("APPROVED", "PARTIALLY_APPROVED", "DENIED"):
+            claim.processed_at = datetime.now(timezone.utc)
+        claim_case.status = CLAIM_OUTCOME_TO_CASE_STATUS[new_status]
+        if claim_number and not claim_case.claim_number:
+            claim_case.claim_number = claim_number
+        round_amount = float(approved_amount) if approved_amount is not None and new_status in ("APPROVED", "PARTIALLY_APPROVED") else None
+    else:
+        # Pre-auth path (existing behavior).
+        new_status = coerce_outcome_for_prior_approval(new_status, claim_case.approved_amount)
 
-    if claim_number and not claim_case.claim_number:
-        claim_case.claim_number = claim_number
+        claim_case.claim_status = new_status
+        claim_case.status = new_status
 
-    round_amount = None
-    if (
-        new_status in ("APPROVED", "PARTIALLY_APPROVED", "ENHANCEMENT_APPROVED")
-        and approved_amount is not None
-    ):
-        round_amount = float(approved_amount)
-        prior_total = float(claim_case.approved_amount or 0)
-        claim_case.approved_amount = prior_total + round_amount
+        if claim_number and not claim_case.claim_number:
+            claim_case.claim_number = claim_number
+
+        round_amount = None
+        if (
+            new_status in ("APPROVED", "PARTIALLY_APPROVED", "ENHANCEMENT_APPROVED")
+            and approved_amount is not None
+        ):
+            round_amount = float(approved_amount)
+            prior_total = float(claim_case.approved_amount or 0)
+            claim_case.approved_amount = prior_total + round_amount
 
     if new_status == "ADR_NMI":
         if documents_list is None:
@@ -579,16 +659,23 @@ def process_by_provider(
     # Structured snapshot of what the provider entered, so the timeline's
     # "View Form" can render the decision form read-only (claim number,
     # approved amount, remarks, requested documents …).
+    cumulative_for_form = (
+        float(claim.approved_amount or 0) if is_claim_stage else float(claim_case.approved_amount or 0)
+    )
     provider_form_values = {
         "decision": new_status,
         "claim_number": claim_number or claim_case.claim_number or "",
         "approved_amount": (round_amount if round_amount is not None else None),
-        "cumulative_approved_amount": float(claim_case.approved_amount or 0),
+        "cumulative_approved_amount": cumulative_for_form,
         "remarks": remarks or "",
         "query_details": query_details or "",
         "documents_requested": documents_requested or "",
         "documents_list": list(documents_list) if documents_list else [],
     }
+    # Claim-stage itemized approval: persist the per-line breakdown so the
+    # View Form modal can render it. Each entry is {label, claimed, approved}.
+    if approved_breakdown is not None:
+        provider_form_values["approved_breakdown"] = approved_breakdown
 
     # Synthetic RECEIVED email so the existing timeline renders this action
     # the same way as an AI-extracted reply from an external provider.
@@ -602,7 +689,11 @@ def process_by_provider(
         body=remarks or query_details,
         form_values=provider_form_values,
         thread_id=claim_case.thread_id,
-        email_type=STATUS_TO_EMAIL_TYPE.get(new_status),
+        email_type=(
+            CLAIM_STATUS_TO_EMAIL_TYPE.get(new_status)
+            if is_claim_stage
+            else STATUS_TO_EMAIL_TYPE.get(new_status)
+        ),
         email_date=datetime.now(timezone.utc),
         is_read=False,
         provider_read=True,
@@ -620,9 +711,30 @@ def process_by_provider(
     db.add(synthetic_email)
     db.flush()  # synthetic_email.id needed for StatusHistory.email_id and any attachment row
 
+    # If the provider filled and saved a Part-D draft (pre-approval) for this
+    # case, link it to the newly-created approval email so it becomes the
+    # canonical Part-D record for this approval round.
+    if not is_claim_stage and new_status in (
+        "APPROVED", "PARTIALLY_APPROVED", "ENHANCEMENT_APPROVED",
+    ):
+        from app.models.part_d_letter import PartDLetter
+        draft = (
+            db.query(PartDLetter)
+            .filter(
+                PartDLetter.claim_case_id == claim_case.id,
+                PartDLetter.claim_case_email_id.is_(None),
+            )
+            .first()
+        )
+        if draft is not None:
+            draft.claim_case_email_id = synthetic_email.id
+
     base_remarks = remarks or query_details or "Processed by insurance provider"
     if round_amount is not None:
-        cumulative = float(claim_case.approved_amount or 0)
+        cumulative = (
+            float(claim.approved_amount or 0) if is_claim_stage
+            else float(claim_case.approved_amount or 0)
+        )
         amount_note = f"Approved this round: ₹{round_amount:,.2f} (cumulative: ₹{cumulative:,.2f})"
         base_remarks = f"{base_remarks} | {amount_note}" if base_remarks else amount_note
     db.add(StatusHistory(

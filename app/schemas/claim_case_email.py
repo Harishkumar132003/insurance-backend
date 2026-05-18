@@ -34,6 +34,8 @@ class ClaimCaseEmailResponse(BaseModel):
     ai_query_details: str | None = None
     ai_documents_requested: str | None = None
     ai_documents_list: list[str] | None = None
+    ai_approved_breakdown: list[dict[str, Any]] | None = None
+    ai_denial_reason: str | None = None
     validation_status: str = "PENDING"
     validated_at: datetime | None = None
     validated_by: UUID | None = None
@@ -80,6 +82,8 @@ class AllClaimCaseEmailListItem(BaseModel):
     ai_query_details: str | None = None
     ai_documents_requested: str | None = None
     ai_documents_list: list[str] | None = None
+    ai_approved_breakdown: list[dict[str, Any]] | None = None
+    ai_denial_reason: str | None = None
     form_values: dict[str, Any] | None = None
     validation_status: str = "PENDING"
     is_latest: bool = False

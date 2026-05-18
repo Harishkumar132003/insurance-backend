@@ -33,15 +33,16 @@ def _get_claim_case(db: Session, claim_case_id, current_user=None) -> ClaimCase:
     return claim_case
 
 
-def _resolve_approval_email(
+def _find_approval_email(
     db: Session, claim_case_id, email_id: int | None
-) -> ClaimCaseEmail:
-    """Return the APPROVAL / PARTIAL_APPROVAL email a Part-D belongs to.
+) -> ClaimCaseEmail | None:
+    """Like `_resolve_approval_email` but tolerant when no approval exists yet.
 
-    If `email_id` is given, validate it belongs to this claim and is an
-    approval email. Otherwise return the most recent approval email. 404 if
-    the claim has no approval email yet — you can't write an authorization
-    letter for an unapproved claim.
+    - With `email_id`: validates it belongs to this claim and is an approval
+      email; raises 404/400 on mismatch (caller-supplied id must be valid).
+    - Without `email_id`: returns the most recent approval email if there is
+      one, or `None` if the case hasn't been approved yet (so callers can
+      operate on a draft Part-D row instead of erroring out).
     """
     if email_id is not None:
         email = (
@@ -67,7 +68,7 @@ def _resolve_approval_email(
             )
         return email
 
-    email = (
+    return (
         db.query(ClaimCaseEmail)
         .filter(
             ClaimCaseEmail.claim_case_id == claim_case_id,
@@ -76,12 +77,6 @@ def _resolve_approval_email(
         .order_by(ClaimCaseEmail.created_at.desc())
         .first()
     )
-    if not email:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Claim case has no approval email yet — nothing to generate a Part-D for",
-        )
-    return email
 
 
 def _to_response(part_d: PartDLetter) -> PartDLetterResponse:
@@ -90,12 +85,15 @@ def _to_response(part_d: PartDLetter) -> PartDLetterResponse:
     return resp
 
 
-def _stub_response(claim_case: ClaimCase, email: ClaimCaseEmail) -> PartDLetterResponse:
+def _stub_response(
+    claim_case: ClaimCase, email: ClaimCaseEmail | None
+) -> PartDLetterResponse:
     """A not-yet-persisted Part-D prefilled from the claim. The modal renders
-    from this on first open; nothing is written until a PUT."""
+    from this on first open; nothing is written until a PUT. When `email` is
+    None (draft mode pre-approval), `claim_case_email_id` is omitted."""
     return PartDLetterResponse(
         claim_case_id=claim_case.id,
-        claim_case_email_id=email.id,
+        claim_case_email_id=email.id if email else None,
         approved_amount=(
             float(claim_case.approved_amount)
             if claim_case.approved_amount is not None else None
@@ -105,16 +103,33 @@ def _stub_response(claim_case: ClaimCase, email: ClaimCaseEmail) -> PartDLetterR
     )
 
 
+def _find_existing_part_d(
+    db: Session, claim_case_id, email: ClaimCaseEmail | None
+) -> PartDLetter | None:
+    """Existing Part-D row for the resolved scope: bound to the approval email
+    if one is given, else the case's draft (email_id IS NULL)."""
+    if email is not None:
+        return (
+            db.query(PartDLetter)
+            .filter(PartDLetter.claim_case_email_id == email.id)
+            .first()
+        )
+    return (
+        db.query(PartDLetter)
+        .filter(
+            PartDLetter.claim_case_id == claim_case_id,
+            PartDLetter.claim_case_email_id.is_(None),
+        )
+        .first()
+    )
+
+
 def get_part_d(
     db: Session, claim_case_id, email_id: int | None = None, current_user=None
 ) -> PartDLetterResponse:
     claim_case = _get_claim_case(db, claim_case_id, current_user)
-    email = _resolve_approval_email(db, claim_case_id, email_id)
-    part_d = (
-        db.query(PartDLetter)
-        .filter(PartDLetter.claim_case_email_id == email.id)
-        .first()
-    )
+    email = _find_approval_email(db, claim_case_id, email_id)
+    part_d = _find_existing_part_d(db, claim_case_id, email)
     if part_d:
         return _to_response(part_d)
     return _stub_response(claim_case, email)
@@ -130,24 +145,26 @@ def upsert_part_d(
     attachment_content_type: str | None = None,
     current_user=None,
 ) -> PartDLetterResponse:
-    """Create or update the Part-D for the resolved approval email.
+    """Create or update the Part-D for this claim_case.
+
+    - Post-approval: bound to the resolved approval email (one Part-D per
+      approval round).
+    - Pre-approval (no approval email yet): persisted as a draft with
+      `claim_case_email_id = NULL`. When the provider later approves via
+      `process_by_provider`, the draft is linked to the new approval email.
 
     `fields` is a dict of {field_name: value} — only keys present are applied
-    (partial update). If a file is provided it's saved, attached to the
-    approval email as a ClaimCaseEmailAttachment, and linked via attachment_id.
+    (partial update). A file attachment can only be persisted when an approval
+    email exists (we need an email to bind the `ClaimCaseEmailAttachment`).
     """
     claim_case = _get_claim_case(db, claim_case_id, current_user)
-    email = _resolve_approval_email(db, claim_case_id, email_id)
+    email = _find_approval_email(db, claim_case_id, email_id)
 
-    part_d = (
-        db.query(PartDLetter)
-        .filter(PartDLetter.claim_case_email_id == email.id)
-        .first()
-    )
+    part_d = _find_existing_part_d(db, claim_case_id, email)
     if not part_d:
         part_d = PartDLetter(
             claim_case_id=claim_case.id,
-            claim_case_email_id=email.id,
+            claim_case_email_id=email.id if email else None,
             # Sensible defaults from the claim for the two header fields, so a
             # PUT that omits them still produces a complete-looking letter.
             approved_amount=claim_case.approved_amount,
@@ -160,22 +177,29 @@ def upsert_part_d(
             setattr(part_d, name, fields[name])
 
     if attachment_bytes and attachment_filename:
-        db.flush()  # need email + part_d ids
-        stored_filename, file_path = save_attachment(
-            claim_case.id, attachment_bytes, attachment_filename
-        )
-        att = ClaimCaseEmailAttachment(
-            email_id=email.id,
-            claim_case_id=claim_case.id,
-            original_filename=attachment_filename,
-            stored_filename=stored_filename,
-            file_path=file_path,
-            content_type=attachment_content_type,
-            file_size=len(attachment_bytes),
-        )
-        db.add(att)
-        db.flush()
-        part_d.attachment_id = att.id
+        if email is None:
+            # Draft Part-D has no email to bind an attachment to. We silently
+            # drop the file at this stage — the provider attaches the printed
+            # PDF manually inside the Approve modal, which uses a different
+            # code path (process_by_provider) to persist the attachment.
+            pass
+        else:
+            db.flush()  # need email + part_d ids
+            stored_filename, file_path = save_attachment(
+                claim_case.id, attachment_bytes, attachment_filename
+            )
+            att = ClaimCaseEmailAttachment(
+                email_id=email.id,
+                claim_case_id=claim_case.id,
+                original_filename=attachment_filename,
+                stored_filename=stored_filename,
+                file_path=file_path,
+                content_type=attachment_content_type,
+                file_size=len(attachment_bytes),
+            )
+            db.add(att)
+            db.flush()
+            part_d.attachment_id = att.id
 
     db.commit()
     db.refresh(part_d)
