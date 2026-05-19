@@ -30,6 +30,8 @@ from app.routes.mock_routes import router as mock_router
 from app.routes.cc_email_routes import router as cc_email_router
 from app.routes.summary_prompt_template_routes import router as summary_prompt_template_router
 from app.routes.feature_routes import router as feature_router
+from app.routes.events_routes import router as events_router
+from app.services.event_hub import event_hub
 from app.models.summary_prompt_template import SummaryPromptTemplate
 from sqlalchemy.orm import Session
 
@@ -138,6 +140,10 @@ async def lifespan(app: FastAPI):
     Base.metadata.create_all(bind=engine)
     _run_migrations()
     #_seed_summary_prompts()
+    # Give the event hub a handle on the running loop so the email-reader
+    # thread can publish back onto it.
+    import asyncio as _asyncio
+    event_hub.bind_loop(_asyncio.get_running_loop())
     start_email_scheduler()
     yield
     stop_email_scheduler()
@@ -169,6 +175,7 @@ app.include_router(mock_router, prefix="/api/v1")
 app.include_router(cc_email_router, prefix="/api/v1")
 app.include_router(summary_prompt_template_router, prefix="/api/v1")
 app.include_router(feature_router, prefix="/api/v1")
+app.include_router(events_router, prefix="/api/v1")
 
 
 @app.get("/health")

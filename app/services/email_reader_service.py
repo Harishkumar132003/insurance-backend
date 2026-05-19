@@ -339,6 +339,23 @@ def _process_single_email(db: Session, email_data: dict):
         f"suggested_status={extracted_status}, claim_number={claim_number}, amount={approved_amount}"
     )
 
+    # Fire a real-time push to any SSE subscribers for this hospital. This is
+    # best-effort — wrapped in try/except so a hub error never breaks email
+    # persistence (which has already committed by this point).
+    try:
+        from app.services.event_hub import event_hub  # local import to avoid circular
+        event_hub.publish_threadsafe(
+            claim_case.hospital_id,
+            {
+                "type": "email.received",
+                "claim_case_id": str(claim_case.id),
+                "subject": email_data.get("subject", ""),
+                "from_email": email_data.get("from_email", ""),
+            },
+        )
+    except Exception as _publish_err:  # pragma: no cover — defensive
+        logger.warning(f"event_hub publish failed (non-fatal): {_publish_err}")
+
 
 def _analyze_email_with_openai(subject: str, body: str, from_email: str) -> dict | None:
     """Use OpenAI to extract claim_number, status, and summary from email."""

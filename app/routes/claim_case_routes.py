@@ -259,6 +259,20 @@ async def put_part_d(
     )
 
 
+@router.get("/emails/uncategorized-count")
+def get_uncategorized_email_count(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Total RECEIVED emails not yet marked read, scoped to the caller's
+    hospital. Drives the sidebar's unread indicator. Hospital-admin only."""
+    if current_user.role != "HOSPITAL_ADMIN":
+        return {"total": 0}
+    return claim_case_email_controller.get_uncategorized_count(
+        db, current_user.hospital_id
+    )
+
+
 @router.get("/emails/all", response_model=PaginatedEmailListResponse)
 def get_all_claim_case_emails(
     page: int = Query(default=1, ge=1, description="Page number"),

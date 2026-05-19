@@ -18,6 +18,24 @@ from app.models.status_history import StatusHistory
 from app.utils.file_storage import get_attachment_full_path, save_attachment
 
 
+def get_uncategorized_count(db: Session, hospital_id) -> dict:
+    """Count of unread RECEIVED emails for this hospital. Used by the
+    sidebar indicator + the SSE-driven realtime notifier on the frontend."""
+    if hospital_id is None:
+        return {"total": 0}
+    total = (
+        db.query(func.count(ClaimCaseEmail.id))
+        .join(ClaimCase, ClaimCaseEmail.claim_case_id == ClaimCase.id)
+        .filter(
+            ClaimCase.hospital_id == hospital_id,
+            ClaimCaseEmail.direction == "RECEIVED",
+            ClaimCaseEmail.is_read.is_(False),
+        )
+        .scalar()
+    )
+    return {"total": int(total or 0)}
+
+
 def get_all_claim_case_emails(
     db: Session,
     hospital_id,
