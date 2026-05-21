@@ -422,11 +422,12 @@ def send_query_email(
         ),
     ))
 
+    created_attachments: list[ClaimCaseEmailAttachment] = []
     for file_bytes, filename, content_type in attachments:
         stored_filename, file_path = save_attachment(
             claim_case.id, file_bytes, filename
         )
-        db.add(ClaimCaseEmailAttachment(
+        att = ClaimCaseEmailAttachment(
             email_id=email_record.id,
             claim_case_id=claim_case.id,
             original_filename=filename,
@@ -434,7 +435,34 @@ def send_query_email(
             file_path=file_path,
             content_type=content_type,
             file_size=len(file_bytes),
-        ))
+        )
+        db.add(att)
+        created_attachments.append(att)
+    db.flush()  # assign ids before linking them into form_values
+
+    # Link each attached ADR checklist item to its uploaded attachment by
+    # ORDER (not filename): the frontend sends the per-item files first, in
+    # checklist order, ahead of any extra files. So the i-th attached item
+    # maps to the i-th uploaded-file attachment. This lets the timeline open
+    # the exact file behind each requested-document chip.
+    if isinstance(form_values, dict) and isinstance(form_values.get("items"), list):
+        uploaded_count = len(uploaded_files or [])
+        uploaded_atts = created_attachments[:uploaded_count]
+        cursor = 0
+        new_items = []
+        for raw in form_values["items"]:
+            it = dict(raw) if isinstance(raw, dict) else raw
+            if (
+                isinstance(it, dict)
+                and it.get("attached")
+                and it.get("filename")
+                and cursor < len(uploaded_atts)
+            ):
+                it["attachment_id"] = uploaded_atts[cursor].id
+                cursor += 1
+            new_items.append(it)
+        # Reassign a fresh dict so SQLAlchemy detects the JSONB change.
+        email_record.form_values = {**form_values, "items": new_items}
 
     db.commit()
 

@@ -183,6 +183,7 @@ def get_all_claim_case_emails(
                     "original_filename": att.original_filename,
                     "content_type": att.content_type,
                     "file_size": att.file_size,
+                    "document_type": att.document_type,
                     "created_at": att.created_at,
                 }
                 for att in email.attachments

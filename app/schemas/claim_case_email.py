@@ -10,6 +10,7 @@ class ClaimCaseEmailAttachmentResponse(BaseModel):
     original_filename: str
     content_type: str | None = None
     file_size: int | None = None
+    document_type: str | None = None
     created_at: datetime
 
     model_config = {"from_attributes": True}

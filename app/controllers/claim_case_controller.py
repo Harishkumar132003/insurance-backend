@@ -23,6 +23,7 @@ def get_all_claims(
     policy_provider_id: UUID | None = None,
     q: str | None = None,
     stage: str | None = None,
+    approved_only: bool = False,
 ) -> list[dict]:
     query = db.query(ClaimCase)
     if policy_provider_id is not None:
@@ -39,6 +40,12 @@ def get_all_claims(
 
     if stage:
         query = query.filter(ClaimCase.current_stage == stage)
+
+    if approved_only:
+        query = query.filter(
+            ClaimCase.approved_amount.isnot(None),
+            ClaimCase.approved_amount > 0,
+        )
 
     # Search: matches UHID directly OR a patient_name on any FormData row for
     # this claim (form_data.data_json -> patient_insured -> patient_name).

@@ -16,6 +16,11 @@ class ClaimCaseEmailAttachment(Base):
     file_path = Column(String, nullable=False)
     content_type = Column(String, nullable=True)
     file_size = Column(BigInteger, nullable=True)
+    # Mirrors ClaimCaseDocument.document_type when the attachment was sourced
+    # from a categorized claim document (CONSOLIDATED_BILLS, DISCHARGE_SUMMARY,
+    # …). NULL for pre-auth Part-C files and attachments created before this
+    # column existed.
+    document_type = Column(String, nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
     email = relationship("ClaimCaseEmail", back_populates="attachments")

@@ -43,6 +43,7 @@ def _run_migrations():
         "ALTER TABLE claim_case_emails ADD COLUMN IF NOT EXISTS email_type VARCHAR",
         "ALTER TABLE claim_cases ADD COLUMN IF NOT EXISTS approved_amount NUMERIC(12,2)",
         "ALTER TABLE claim_case_documents ADD COLUMN IF NOT EXISTS document_type VARCHAR",
+        "ALTER TABLE claim_case_email_attachments ADD COLUMN IF NOT EXISTS document_type VARCHAR",
         # Allow Part-D drafts (pre-approval). One UNIQUE per approval-bound
         # row; one UNIQUE per draft (claim_case_id where email_id IS NULL).
         "ALTER TABLE part_d_letters ALTER COLUMN claim_case_email_id DROP NOT NULL",

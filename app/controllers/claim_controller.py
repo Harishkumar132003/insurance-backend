@@ -189,6 +189,7 @@ def raise_claim(
     )
     attachments: list[tuple[bytes, str, str]] = []
     attached_docs: list[ClaimCaseDocument] = []
+    attachment_doc_types: list[str | None] = []
     for doc in pending_docs:
         try:
             file_bytes = read_file(doc.file_path)
@@ -200,6 +201,7 @@ def raise_claim(
             continue
         attachments.append((file_bytes, doc.original_filename, doc.content_type or "application/octet-stream"))
         attached_docs.append(doc)
+        attachment_doc_types.append(doc.document_type)
 
     sent_message_id: str | None = None
     if is_onboarded:
@@ -256,7 +258,7 @@ def raise_claim(
     for doc in attached_docs:
         doc.sent_email_id = email_record.id
 
-    for file_bytes, filename, content_type in attachments:
+    for (file_bytes, filename, content_type), doc_type in zip(attachments, attachment_doc_types):
         stored_filename, file_path = save_attachment(claim_case.id, file_bytes, filename)
         db.add(ClaimCaseEmailAttachment(
             email_id=email_record.id,
@@ -266,6 +268,7 @@ def raise_claim(
             file_path=file_path,
             content_type=content_type,
             file_size=len(file_bytes),
+            document_type=doc_type,
         ))
 
     claim_case.current_stage = "CLAIM"

@@ -37,6 +37,7 @@ def get_all_claims(
     provider_id: UUID | None = Query(default=None, description="Filter by policy provider ID"),
     q: str | None = Query(default=None, description="Search by UHID or patient name (case-insensitive substring match)"),
     stage: str | None = Query(default=None, description="Filter by current_stage: PRE_AUTH or CLAIM"),
+    approved_only: bool = Query(default=False, description="Only cases with approved_amount > 0"),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
@@ -53,6 +54,7 @@ def get_all_claims(
         policy_provider_id=policy_provider_id,
         q=q,
         stage=stage,
+        approved_only=approved_only,
     )
 
 
