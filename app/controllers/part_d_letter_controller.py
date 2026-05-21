@@ -34,22 +34,23 @@ def _get_claim_case(db: Session, claim_case_id, current_user=None) -> ClaimCase:
 
 
 def _find_approval_email(
-    db: Session, claim_case_id, email_id: int | None
+    db: Session, claim_case, email_id: int | None
 ) -> ClaimCaseEmail | None:
     """Like `_resolve_approval_email` but tolerant when no approval exists yet.
 
     - With `email_id`: validates it belongs to this claim and is an approval
       email; raises 404/400 on mismatch (caller-supplied id must be valid).
-    - Without `email_id`: returns the most recent approval email if there is
-      one, or `None` if the case hasn't been approved yet (so callers can
-      operate on a draft Part-D row instead of erroring out).
+    - Without `email_id`: returns the most recent approval email — UNLESS the
+      case is currently awaiting a fresh provider decision (a new round after
+      an enhancement / ADR), in which case it returns `None` so callers operate
+      on a NEW draft Part-D instead of reusing the previous round's letter.
     """
     if email_id is not None:
         email = (
             db.query(ClaimCaseEmail)
             .filter(
                 ClaimCaseEmail.id == email_id,
-                ClaimCaseEmail.claim_case_id == claim_case_id,
+                ClaimCaseEmail.claim_case_id == claim_case.id,
             )
             .first()
         )
@@ -68,10 +69,15 @@ def _find_approval_email(
             )
         return email
 
+    # Fresh round pending → don't reuse a prior approval's bound Part-D.
+    from app.controllers.claim_case_controller import AWAITING_PROVIDER_STATUSES
+    if claim_case.status in AWAITING_PROVIDER_STATUSES:
+        return None
+
     return (
         db.query(ClaimCaseEmail)
         .filter(
-            ClaimCaseEmail.claim_case_id == claim_case_id,
+            ClaimCaseEmail.claim_case_id == claim_case.id,
             ClaimCaseEmail.email_type.in_(_APPROVAL_EMAIL_TYPES),
         )
         .order_by(ClaimCaseEmail.created_at.desc())
@@ -128,7 +134,7 @@ def get_part_d(
     db: Session, claim_case_id, email_id: int | None = None, current_user=None
 ) -> PartDLetterResponse:
     claim_case = _get_claim_case(db, claim_case_id, current_user)
-    email = _find_approval_email(db, claim_case_id, email_id)
+    email = _find_approval_email(db, claim_case, email_id)
     part_d = _find_existing_part_d(db, claim_case_id, email)
     if part_d:
         return _to_response(part_d)
@@ -158,7 +164,7 @@ def upsert_part_d(
     email exists (we need an email to bind the `ClaimCaseEmailAttachment`).
     """
     claim_case = _get_claim_case(db, claim_case_id, current_user)
-    email = _find_approval_email(db, claim_case_id, email_id)
+    email = _find_approval_email(db, claim_case, email_id)
 
     part_d = _find_existing_part_d(db, claim_case_id, email)
     if not part_d:
