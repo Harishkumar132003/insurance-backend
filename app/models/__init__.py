@@ -4,6 +4,7 @@ from app.models.hospital_config import HospitalConfig
 from app.models.execution_log import ExecutionLog
 from app.models.hospital_prompt import HospitalPrompt
 from app.models.policy_provider_config import PolicyProviderConfig
+from app.models.hospital_provider_mapping import HospitalProviderMapping
 from app.models.form_template import FormTemplate
 from app.models.form_data import FormData
 from app.models.patient import Patient

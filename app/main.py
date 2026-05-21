@@ -21,6 +21,7 @@ from app.routes.hospital_config_routes import router as hospital_config_router
 from app.routes.workflow_routes import router as workflow_router
 from app.routes.hospital_prompt_routes import router as hospital_prompt_router
 from app.routes.policy_provider_routes import router as policy_provider_router
+from app.routes.hospital_provider_routes import router as hospital_provider_router
 from app.routes.form_template_routes import router as form_template_router
 from app.routes.form_data_routes import router as form_data_router
 from app.routes.email_routes import router as email_router
@@ -167,6 +168,7 @@ app.include_router(hospital_config_router, prefix="/api/v1")
 app.include_router(workflow_router, prefix="/api/v1")
 app.include_router(hospital_prompt_router, prefix="/api/v1")
 app.include_router(policy_provider_router, prefix="/api/v1")
+app.include_router(hospital_provider_router, prefix="/api/v1")
 app.include_router(form_template_router, prefix="/api/v1")
 app.include_router(form_data_router, prefix="/api/v1")
 app.include_router(email_router, prefix="/api/v1")
