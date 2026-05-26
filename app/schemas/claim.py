@@ -25,6 +25,20 @@ class ClaimDocumentGroup(BaseModel):
     documents: list[ClaimCaseDocumentResponse]
 
 
+class ClaimDraftSave(BaseModel):
+    bill_breakdown: list[BillBreakdownItem] = Field(default_factory=list)
+    claimed_amount: Decimal | None = None
+    remarks: str | None = None
+
+
+class ClaimDraftResponse(BaseModel):
+    is_persisted: bool
+    bill_breakdown: list[BillBreakdownItem] = Field(default_factory=list)
+    claimed_amount: Decimal | None = None
+    remarks: str | None = None
+    updated_at: datetime | None = None
+
+
 class ClaimResponse(BaseModel):
     id: int
     claim_case_id: UUID

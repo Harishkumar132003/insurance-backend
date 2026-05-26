@@ -21,6 +21,8 @@ from app.schemas.claim import (
     BillBreakdownItem,
     ClaimCreate,
     ClaimDocumentGroup,
+    ClaimDraftResponse,
+    ClaimDraftSave,
     ClaimResponse,
 )
 from app.schemas.claim_case_document import ClaimCaseDocumentResponse
@@ -150,18 +152,23 @@ def raise_claim(
     )
     is_onboarded = bool(provider and provider.is_onboarded)
 
-    form = FormData(
-        claim_case_id=claim_case.id,
-        data_json={
-            "bill_breakdown": [
-                {"label": i.label, "amount": str(i.amount)} for i in payload.bill_breakdown
-            ],
-            "remarks": payload.remarks,
-            "stage": "CLAIM",
-        },
-        status="SUBMITTED",
-    )
-    db.add(form)
+    draft_form = _find_claim_draft(db, claim_case.id)
+    form_data_json = {
+        "bill_breakdown": [
+            {"label": i.label, "amount": str(i.amount)} for i in payload.bill_breakdown
+        ],
+        "remarks": payload.remarks,
+        "stage": "CLAIM",
+    }
+    if draft_form is not None:
+        draft_form.data_json = form_data_json
+        draft_form.status = "SUBMITTED"
+    else:
+        db.add(FormData(
+            claim_case_id=claim_case.id,
+            data_json=form_data_json,
+            status="SUBMITTED",
+        ))
 
     claim = Claim(
         claim_case_id=claim_case.id,
@@ -327,3 +334,105 @@ def get_claim(db: Session, claim_case_id, current_user: User) -> ClaimResponse:
         is_onboarded=is_onboarded,
         email_record_id=submission_email.id if submission_email else None,
     )
+
+
+def _find_claim_draft(db: Session, claim_case_id) -> FormData | None:
+    return (
+        db.query(FormData)
+        .filter(
+            FormData.claim_case_id == claim_case_id,
+            FormData.status == "DRAFT",
+            FormData.data_json["stage"].astext == "CLAIM",
+        )
+        .order_by(FormData.created_at.desc())
+        .first()
+    )
+
+
+def _draft_to_response(draft: FormData | None) -> ClaimDraftResponse:
+    if draft is None:
+        return ClaimDraftResponse(is_persisted=False)
+    data = draft.data_json or {}
+    items = []
+    for raw in data.get("bill_breakdown", []) or []:
+        try:
+            items.append(BillBreakdownItem(label=raw["label"], amount=Decimal(str(raw["amount"]))))
+        except (KeyError, TypeError):
+            continue
+    claimed_raw = data.get("claimed_amount")
+    claimed = Decimal(str(claimed_raw)) if claimed_raw not in (None, "") else None
+    return ClaimDraftResponse(
+        is_persisted=True,
+        bill_breakdown=items,
+        claimed_amount=claimed,
+        remarks=data.get("remarks"),
+        updated_at=draft.updated_at or draft.created_at,
+    )
+
+
+def get_claim_draft(db: Session, claim_case_id, current_user: User) -> ClaimDraftResponse:
+    claim_case = db.query(ClaimCase).filter(ClaimCase.id == claim_case_id).first()
+    if not claim_case:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Claim case not found")
+    _scope_to_user(claim_case, current_user)
+    return _draft_to_response(_find_claim_draft(db, claim_case.id))
+
+
+def save_claim_draft(
+    db: Session, claim_case_id, payload: ClaimDraftSave, current_user: User,
+) -> ClaimDraftResponse:
+    claim_case = db.query(ClaimCase).filter(ClaimCase.id == claim_case_id).first()
+    if not claim_case:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Claim case not found")
+    _scope_to_user(claim_case, current_user)
+
+    if db.query(Claim).filter(Claim.claim_case_id == claim_case.id).first():
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Claim has already been raised; drafts are no longer applicable",
+        )
+
+    data_json = {
+        "bill_breakdown": [
+            {"label": i.label, "amount": str(i.amount)} for i in payload.bill_breakdown
+        ],
+        "claimed_amount": str(payload.claimed_amount) if payload.claimed_amount is not None else None,
+        "remarks": payload.remarks,
+        "stage": "CLAIM",
+    }
+
+    draft = _find_claim_draft(db, claim_case.id)
+    if draft is None:
+        draft = FormData(
+            claim_case_id=claim_case.id,
+            data_json=data_json,
+            status="DRAFT",
+        )
+        db.add(draft)
+    else:
+        draft.data_json = data_json
+
+    db.commit()
+    db.refresh(draft)
+    return _draft_to_response(draft)
+
+
+def delete_claim_draft(db: Session, claim_case_id, current_user: User) -> None:
+    claim_case = db.query(ClaimCase).filter(ClaimCase.id == claim_case_id).first()
+    if not claim_case:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Claim case not found")
+    _scope_to_user(claim_case, current_user)
+
+    draft = _find_claim_draft(db, claim_case.id)
+    if draft is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No draft to delete")
+
+    # Files uploaded for this draft live as ClaimCaseDocument rows with
+    # sent_email_id=NULL. Clean them up so the next attempt starts fresh.
+    db.query(ClaimCaseDocument).filter(
+        ClaimCaseDocument.claim_case_id == claim_case.id,
+        ClaimCaseDocument.sent_email_id.is_(None),
+    ).delete(synchronize_session=False)
+
+    db.delete(draft)
+    db.commit()

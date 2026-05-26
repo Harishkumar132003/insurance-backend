@@ -7,7 +7,7 @@ from sqlalchemy.orm import Session
 from app.db.session import get_db
 from app.core.deps import get_current_user, require_insurance_provider
 from app.models.user import User
-from app.schemas.claim import ClaimCreate, ClaimResponse
+from app.schemas.claim import ClaimCreate, ClaimDraftResponse, ClaimDraftSave, ClaimResponse
 from app.schemas.claim_case import (
     ClaimCaseResponse,
     ClaimCaseDetailResponse,
@@ -522,3 +522,42 @@ def get_claim(
     current_user: User = Depends(get_current_user),
 ):
     return claim_controller.get_claim(db, claim_case_id, current_user)
+
+
+def _require_hospital_admin(current_user: User) -> None:
+    if current_user.role != "HOSPITAL_ADMIN":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only hospital admins can manage claim drafts",
+        )
+
+
+@router.get("/{claim_case_id}/claim-draft", response_model=ClaimDraftResponse)
+def get_claim_draft(
+    claim_case_id: UUID,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    _require_hospital_admin(current_user)
+    return claim_controller.get_claim_draft(db, claim_case_id, current_user)
+
+
+@router.put("/{claim_case_id}/claim-draft", response_model=ClaimDraftResponse)
+def save_claim_draft(
+    claim_case_id: UUID,
+    payload: ClaimDraftSave,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    _require_hospital_admin(current_user)
+    return claim_controller.save_claim_draft(db, claim_case_id, payload, current_user)
+
+
+@router.delete("/{claim_case_id}/claim-draft", status_code=204)
+def delete_claim_draft(
+    claim_case_id: UUID,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    _require_hospital_admin(current_user)
+    claim_controller.delete_claim_draft(db, claim_case_id, current_user)
