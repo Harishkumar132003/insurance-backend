@@ -68,6 +68,8 @@ class AllClaimCaseEmailListItem(BaseModel):
     id: int
     claim_case_id: UUID
     claim_number: str | None = None
+    current_stage: str | None = None
+    case_status: str | None = None
     patient_name: str | None = None
     provider_name: str | None = None
     is_onboard_claim: bool = False

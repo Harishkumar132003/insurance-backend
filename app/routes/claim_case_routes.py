@@ -9,6 +9,7 @@ from app.core.deps import get_current_user, require_insurance_provider
 from app.models.user import User
 from app.schemas.claim import ClaimCreate, ClaimDraftResponse, ClaimDraftSave, ClaimResponse
 from app.schemas.claim_case import (
+    CancelClaimCaseRequest,
     ClaimCaseResponse,
     ClaimCaseDetailResponse,
     ClaimCaseStatusUpdate,
@@ -332,6 +333,18 @@ def update_claim_case_status(
 ):
     return claim_case_controller.update_claim_case_status(
         db, claim_case_id, payload.status, payload.remarks, user_id=current_user.id
+    )
+
+
+@router.post("/{claim_case_id}/cancel", response_model=ClaimCaseResponse)
+def cancel_claim_case(
+    claim_case_id: UUID,
+    payload: CancelClaimCaseRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    return claim_case_controller.cancel_claim_case(
+        db, claim_case_id, payload.reason, current_user,
     )
 
 

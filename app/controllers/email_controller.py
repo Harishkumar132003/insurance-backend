@@ -119,6 +119,11 @@ def send_form_email(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Claim case not found",
         )
+    if claim_case.status == "CANCELLED":
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Case is cancelled — no further action is allowed",
+        )
 
     provider = (
         db.query(PolicyProviderConfig)

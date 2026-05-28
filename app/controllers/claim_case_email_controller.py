@@ -28,6 +28,7 @@ def get_uncategorized_count(db: Session, hospital_id) -> dict:
         .join(ClaimCase, ClaimCaseEmail.claim_case_id == ClaimCase.id)
         .filter(
             ClaimCase.hospital_id == hospital_id,
+            ClaimCase.status != "CANCELLED",
             ClaimCaseEmail.direction == "RECEIVED",
             ClaimCaseEmail.is_read.is_(False),
         )
@@ -91,6 +92,8 @@ def get_all_claim_case_emails(
         db.query(
             ClaimCaseEmail,
             ClaimCase.claim_number,
+            ClaimCase.current_stage,
+            ClaimCase.status.label("case_status"),
             PolicyProviderConfig.is_onboarded,
             PolicyProviderConfig.name.label("provider_name"),
         )
@@ -153,6 +156,8 @@ def get_all_claim_case_emails(
             "id": email.id,
             "claim_case_id": email.claim_case_id,
             "claim_number": row.claim_number,
+            "current_stage": row.current_stage,
+            "case_status": row.case_status,
             "patient_name": patient_name_by_case.get(email.claim_case_id),
             "provider_name": row.provider_name,
             "is_onboard_claim": bool(row.is_onboarded),

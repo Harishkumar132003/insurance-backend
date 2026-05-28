@@ -107,6 +107,13 @@ def get_all_claims(
         claim = db.query(Claim).filter(Claim.claim_case_id == cc.id).first()
         if claim and claim.claimed_amount is not None:
             amount = float(claim.claimed_amount)
+        # Claim-stage specific figures used by the Claim Tracker view.
+        claim_raised_amount = (
+            float(claim.claimed_amount) if claim and claim.claimed_amount is not None else None
+        )
+        claim_approved_amount = (
+            float(claim.approved_amount) if claim and claim.approved_amount is not None else None
+        )
 
         # Get provider details
         provider_name = None
@@ -138,8 +145,11 @@ def get_all_claims(
             "provider_id": provider_id_str,
             "amount": amount,
             "approved_amount": float(cc.approved_amount) if cc.approved_amount is not None else None,
+            "claim_raised_amount": claim_raised_amount,
+            "claim_approved_amount": claim_approved_amount,
             "status": cc.claim_status or cc.status,
             "workflow_status": cc.status,
+            "awaiting_provider_action": cc.status in AWAITING_PROVIDER_STATUSES,
             "unread_count": unread_count,
             "created_at": cc.created_at,
         })
@@ -305,7 +315,16 @@ OUTCOME_STATUSES = {
     "APPROVED", "PARTIALLY_APPROVED", "DENIED",
     "ENHANCEMENT_APPROVED", "ENHANCEMENT_DENIED", "ADR_NMI",
 }
-VALID_STATUSES = {"DRAFT"} | AWAITING_PROVIDER_STATUSES | OUTCOME_STATUSES | {"UNKNOWN"}
+VALID_STATUSES = {"DRAFT"} | AWAITING_PROVIDER_STATUSES | OUTCOME_STATUSES | {"UNKNOWN", "CANCELLED"}
+
+
+def _ensure_not_cancelled(claim_case: ClaimCase) -> None:
+    """Hard-block any write path once the case has been cancelled."""
+    if claim_case is not None and claim_case.status == "CANCELLED":
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Case is cancelled — no further action is allowed",
+        )
 
 # Map the current outcome to the workflow state we move into when the hospital
 # sends a reply (query / docs) back to the provider. See claim-flow diagram.
@@ -364,6 +383,7 @@ def update_claim_case_status(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Claim case not found",
         )
+    _ensure_not_cancelled(claim_case)
 
     if new_status not in VALID_STATUSES:
         raise HTTPException(
@@ -425,6 +445,7 @@ def update_extracted_data(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Claim case not found",
         )
+    _ensure_not_cancelled(claim_case)
 
     email_record = (
         db.query(ClaimCaseEmail)
@@ -681,6 +702,164 @@ def update_extracted_data(
         email_id=email_id,
         changed_by="MANUAL_EDIT",
         updated_by=user_id,
+    ))
+
+    db.commit()
+    db.refresh(claim_case)
+    return claim_case
+
+
+def cancel_claim_case(
+    db: Session,
+    claim_case_id,
+    reason: str,
+    current_user,
+) -> ClaimCase:
+    """Mark a claim case as CANCELLED — terminal, no further action allowed.
+
+    For onboarded providers we just flip the status; the in-app dashboard
+    surfaces it. For external providers we additionally send a cancellation
+    email so they know not to act on the request.
+    """
+    from app.controllers.email_controller import (
+        _resolve_hospital_credentials,
+        _resolve_thread_context,
+        _threaded_subject,
+    )
+    from app.services.email_service import send_email
+    from app.models.hospital import Hospital
+
+    reason = (reason or "").strip()
+    if not reason:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Cancellation reason is required",
+        )
+
+    claim_case = db.query(ClaimCase).filter(ClaimCase.id == claim_case_id).first()
+    if not claim_case:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Claim case not found")
+    if current_user.role != "HOSPITAL_ADMIN":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only hospital admins can cancel a case",
+        )
+    if current_user.hospital_id and claim_case.hospital_id != current_user.hospital_id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Not allowed to cancel this claim case",
+        )
+    if claim_case.status == "CANCELLED":
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Case is already cancelled",
+        )
+    if claim_case.status == "DRAFT":
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Draft cases cannot be cancelled — delete the draft instead",
+        )
+    # The effective "are we waiting on the provider?" signal is the latest
+    # status_history entry, NOT claim_case.status: on pre-auth the raw status
+    # column lags (update_extracted_data only writes claim_status). Status
+    # history stores bare statuses (SUBMITTED / ENHANCE_SUBMITTED / RECONSIDER
+    # / ADR_SUBMITTED) for both stages.
+    latest_history = (
+        db.query(StatusHistory)
+        .filter(StatusHistory.claim_case_id == claim_case.id)
+        .order_by(StatusHistory.created_at.desc())
+        .first()
+    )
+    awaiting_statuses = {
+        "SUBMITTED", "ENHANCE_SUBMITTED", "RECONSIDER", "RECONSIDER_SUBMITTED", "ADR_SUBMITTED",
+    }
+    effective_status = latest_history.status if latest_history else claim_case.status
+    if effective_status in awaiting_statuses:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Cannot cancel while waiting on the provider's response",
+        )
+
+    provider = (
+        db.query(PolicyProviderConfig)
+        .filter(PolicyProviderConfig.id == claim_case.policy_provider_id)
+        .first()
+    )
+    is_onboarded = bool(provider and provider.is_onboarded)
+
+    cancelled_at_stage = claim_case.current_stage
+    claim_case.status = "CANCELLED"
+    claim_case.claim_status = "CANCELLED"
+
+    sent_email_id = None
+    if not is_onboarded:
+        # Send a cancellation email to the external provider, threaded with
+        # the existing conversation so it lands in the right inbox folder.
+        if not provider or not provider.email:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Policy provider has no email configured — cannot send cancellation",
+            )
+        from_email, from_password = _resolve_hospital_credentials(db, claim_case)
+        in_reply_to, references, root_subject = _resolve_thread_context(db, claim_case.id)
+        if not claim_case.thread_id:
+            import uuid as _uuid
+            claim_case.thread_id = _uuid.uuid4().hex[:12]
+        hospital = (
+            db.query(Hospital).filter(Hospital.id == claim_case.hospital_id).first()
+            if claim_case.hospital_id else None
+        )
+        hospital_name = hospital.name if hospital and hospital.name else "the hospital"
+        patient_label = claim_case.uhid or str(claim_case.id)
+        ref = claim_case.claim_number or claim_case.uhid or str(claim_case.id)
+        subject = _threaded_subject(
+            f"[{ref}] Request Cancelled [{claim_case.thread_id}]",
+            root_subject,
+        )
+        body = (
+            f"Dear {provider.name or 'Insurer'} Team,\n\n"
+            f"We are withdrawing the request referenced above (UHID: {patient_label}). "
+            f"Please disregard any pending pre-auth / claim action on this case.\n\n"
+            f"Reason: {reason}\n\n"
+            f"Regards,\n{hospital_name} Insurance Desk"
+        )
+        sent_message_id = send_email(
+            from_email=from_email,
+            from_password=from_password,
+            to_email=provider.email,
+            subject=subject,
+            body=body,
+            attachments=None,
+            cc_emails=None,
+            in_reply_to=in_reply_to,
+            references=references or None,
+        )
+        email_row = ClaimCaseEmail(
+            claim_case_id=claim_case.id,
+            direction="SENT",
+            from_email=from_email,
+            to_email=provider.email,
+            subject=subject,
+            body=body,
+            thread_id=claim_case.thread_id,
+            message_id=sent_message_id,
+            email_type="CANCELLED",
+            email_date=datetime.now(timezone.utc),
+            is_read=True,
+            provider_read=False,
+        )
+        db.add(email_row)
+        db.flush()
+        sent_email_id = email_row.id
+
+    db.add(StatusHistory(
+        claim_case_id=claim_case.id,
+        stage=cancelled_at_stage,
+        status="CANCELLED",
+        remarks=reason,
+        email_id=sent_email_id,
+        changed_by="HOSPITAL_ADMIN",
+        updated_by=current_user.id,
     ))
 
     db.commit()

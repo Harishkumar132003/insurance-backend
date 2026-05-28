@@ -122,6 +122,11 @@ def raise_claim(
     if not claim_case:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Claim case not found")
     _scope_to_user(claim_case, current_user)
+    if claim_case.status == "CANCELLED":
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Case is cancelled — no further action is allowed",
+        )
 
     approved = float(claim_case.approved_amount or 0)
     if approved <= 0:

@@ -13,6 +13,10 @@ class ClaimCaseCreate(BaseModel):
     policy_provider_id: UUID
 
 
+class CancelClaimCaseRequest(BaseModel):
+    reason: str
+
+
 class ClaimCaseResponse(BaseModel):
     id: UUID
     uhid: str
@@ -186,8 +190,17 @@ class ClaimListItem(BaseModel):
     provider_id: str | None = None
     amount: float | None = None
     approved_amount: float | None = None
+    # Claim-stage figures (populated only when a Claim row exists).
+    # claim_raised_amount = bill total submitted at raise time.
+    # claim_approved_amount = insurer's claim-stage approval on the Claim row,
+    # distinct from claim_cases.approved_amount (pre-auth cumulative).
+    claim_raised_amount: float | None = None
+    claim_approved_amount: float | None = None
     status: str | None = None
     workflow_status: str | None = None
+    # True when this case's workflow status is one of the AWAITING_PROVIDER
+    # states — drives a "needs your action" indicator on the provider list.
+    awaiting_provider_action: bool = False
     unread_count: int = 0
     created_at: datetime
 

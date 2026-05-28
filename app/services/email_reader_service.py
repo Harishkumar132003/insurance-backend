@@ -243,12 +243,29 @@ def _process_single_email(db: Session, email_data: dict):
     thread_id = _extract_thread_id(subject)
     claim_case = None
     if thread_id:
-        claim_case = (
+        # Look up the thread's case regardless of status FIRST. This matters for
+        # cancelled cases: if we only matched AWAITING_PROVIDER_STATUSES, a reply
+        # to a cancelled thread would miss here and get mis-routed to another
+        # open case by the fuzzy uhid/claim_number fallback below.
+        thread_case = (
             db.query(ClaimCase)
-            .filter(ClaimCase.thread_id == thread_id, ClaimCase.status.in_(AWAITING_PROVIDER_STATUSES))
+            .filter(ClaimCase.thread_id == thread_id)
             .first()
         )
-        if claim_case:
+        if thread_case and thread_case.status == "CANCELLED":
+            # The case was cancelled — record the reply against it for audit
+            # (so it shows under the right, cancelled case in Query Management)
+            # but take no further action: no AI analysis, no status update, no
+            # fuzzy fallback, no SSE notification.
+            _persist_email_record(db, thread_case, email_data, thread_id)
+            db.commit()
+            logger.info(
+                f"Reply to cancelled ClaimCase #{thread_case.id} stored without action "
+                f"(thread_id={thread_id})"
+            )
+            return
+        if thread_case and thread_case.status in AWAITING_PROVIDER_STATUSES:
+            claim_case = thread_case
             logger.info(f"Matched ClaimCase #{claim_case.id} by thread_id={thread_id}")
 
     # 2. Call the right OpenAI extractor based on the matched case's stage.
