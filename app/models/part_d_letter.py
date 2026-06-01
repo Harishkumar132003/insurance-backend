@@ -17,7 +17,7 @@ class PartDLetter(Base):
     __tablename__ = "part_d_letters"
 
     id = Column(BigInteger, primary_key=True, autoincrement=True)
-    claim_case_id = Column(UUID(as_uuid=True), ForeignKey("claim_cases.id"), nullable=False)
+    claim_case_id = Column(UUID(as_uuid=True), ForeignKey("hospitalization.id"), nullable=False)
     # Nullable: the provider can save a Part-D draft before any approval round
     # exists. When the provider eventually approves, process_by_provider links
     # the draft to the newly-created approval email by setting this column.

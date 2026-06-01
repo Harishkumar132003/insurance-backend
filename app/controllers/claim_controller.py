@@ -13,6 +13,7 @@ from app.models.claim_case_document import ClaimCaseDocument
 from app.models.claim_case_email import ClaimCaseEmail
 from app.models.claim_case_email_attachment import ClaimCaseEmailAttachment
 from app.models.form_data import FormData
+from app.models.claim_bill_item import ClaimBillItem
 from app.models.hospital import Hospital
 from app.models.policy_provider_config import PolicyProviderConfig
 from app.models.status_history import StatusHistory
@@ -58,26 +59,21 @@ def _build_response(
     is_onboarded: bool,
     email_record_id: int | None,
 ) -> ClaimResponse:
-    # Latest claim FormData (the one we wrote on raise) holds the breakdown.
+    # Latest claim-stage form row (written on raise) holds the breakdown.
     form = (
         db.query(FormData)
-        .filter(FormData.claim_case_id == claim_case.id)
+        .filter(FormData.claim_case_id == claim_case.id, FormData.stage == "CLAIM")
         .order_by(FormData.created_at.desc())
         .first()
     )
     bill_breakdown: list[BillBreakdownItem] = []
     remarks: str | None = None
-    if form and isinstance(form.data_json, dict):
-        raw_items = form.data_json.get("bill_breakdown") or []
-        for item in raw_items:
-            if isinstance(item, dict) and "label" in item and "amount" in item:
-                try:
-                    bill_breakdown.append(
-                        BillBreakdownItem(label=str(item["label"]), amount=Decimal(str(item["amount"])))
-                    )
-                except Exception:
-                    continue
-        remarks = form.data_json.get("remarks")
+    if form is not None:
+        for item in form.bill_items:
+            bill_breakdown.append(
+                BillBreakdownItem(label=item.label, amount=Decimal(str(item.amount)))
+            )
+        remarks = form.remarks
 
     docs = (
         db.query(ClaimCaseDocument)
@@ -158,22 +154,21 @@ def raise_claim(
     is_onboarded = bool(provider and provider.is_onboarded)
 
     draft_form = _find_claim_draft(db, claim_case.id)
-    form_data_json = {
-        "bill_breakdown": [
-            {"label": i.label, "amount": str(i.amount)} for i in payload.bill_breakdown
-        ],
-        "remarks": payload.remarks,
-        "stage": "CLAIM",
-    }
     if draft_form is not None:
-        draft_form.data_json = form_data_json
-        draft_form.status = "SUBMITTED"
+        claim_form = draft_form
+        claim_form.status = "SUBMITTED"
     else:
-        db.add(FormData(
+        claim_form = FormData(
             claim_case_id=claim_case.id,
-            data_json=form_data_json,
+            stage="CLAIM",
             status="SUBMITTED",
-        ))
+        )
+        db.add(claim_form)
+    claim_form.stage = "CLAIM"
+    claim_form.claimed_amount = payload.claimed_amount
+    claim_form.remarks = payload.remarks
+    db.flush()
+    _replace_bill_items(db, claim_form, payload.bill_breakdown)
 
     claim = Claim(
         claim_case_id=claim_case.id,
@@ -341,13 +336,27 @@ def get_claim(db: Session, claim_case_id, current_user: User) -> ClaimResponse:
     )
 
 
+def _replace_bill_items(db: Session, form_data: FormData, items) -> None:
+    """Replace the claim-stage bill_breakdown lines on a form row."""
+    db.query(ClaimBillItem).filter(ClaimBillItem.form_data_id == form_data.id).delete(
+        synchronize_session=False
+    )
+    for idx, it in enumerate(items or []):
+        db.add(ClaimBillItem(
+            form_data_id=form_data.id,
+            label=it.label,
+            amount=it.amount,
+            sort_order=idx,
+        ))
+
+
 def _find_claim_draft(db: Session, claim_case_id) -> FormData | None:
     return (
         db.query(FormData)
         .filter(
             FormData.claim_case_id == claim_case_id,
             FormData.status == "DRAFT",
-            FormData.data_json["stage"].astext == "CLAIM",
+            FormData.stage == "CLAIM",
         )
         .order_by(FormData.created_at.desc())
         .first()
@@ -357,20 +366,16 @@ def _find_claim_draft(db: Session, claim_case_id) -> FormData | None:
 def _draft_to_response(draft: FormData | None) -> ClaimDraftResponse:
     if draft is None:
         return ClaimDraftResponse(is_persisted=False)
-    data = draft.data_json or {}
-    items = []
-    for raw in data.get("bill_breakdown", []) or []:
-        try:
-            items.append(BillBreakdownItem(label=raw["label"], amount=Decimal(str(raw["amount"]))))
-        except (KeyError, TypeError):
-            continue
-    claimed_raw = data.get("claimed_amount")
-    claimed = Decimal(str(claimed_raw)) if claimed_raw not in (None, "") else None
+    items = [
+        BillBreakdownItem(label=it.label, amount=Decimal(str(it.amount)))
+        for it in draft.bill_items
+    ]
+    claimed = Decimal(str(draft.claimed_amount)) if draft.claimed_amount is not None else None
     return ClaimDraftResponse(
         is_persisted=True,
         bill_breakdown=items,
         claimed_amount=claimed,
-        remarks=data.get("remarks"),
+        remarks=draft.remarks,
         updated_at=draft.updated_at or draft.created_at,
     )
 
@@ -397,25 +402,19 @@ def save_claim_draft(
             detail="Claim has already been raised; drafts are no longer applicable",
         )
 
-    data_json = {
-        "bill_breakdown": [
-            {"label": i.label, "amount": str(i.amount)} for i in payload.bill_breakdown
-        ],
-        "claimed_amount": str(payload.claimed_amount) if payload.claimed_amount is not None else None,
-        "remarks": payload.remarks,
-        "stage": "CLAIM",
-    }
-
     draft = _find_claim_draft(db, claim_case.id)
     if draft is None:
         draft = FormData(
             claim_case_id=claim_case.id,
-            data_json=data_json,
+            stage="CLAIM",
             status="DRAFT",
         )
         db.add(draft)
-    else:
-        draft.data_json = data_json
+    draft.stage = "CLAIM"
+    draft.claimed_amount = payload.claimed_amount
+    draft.remarks = payload.remarks
+    db.flush()
+    _replace_bill_items(db, draft, payload.bill_breakdown)
 
     db.commit()
     db.refresh(draft)

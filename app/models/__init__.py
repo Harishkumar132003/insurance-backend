@@ -9,7 +9,6 @@ from app.models.form_template import FormTemplate
 from app.models.form_data import FormData
 from app.models.patient import Patient
 from app.models.claim_case import ClaimCase
-from app.models.pre_auth import PreAuth
 from app.models.claim import Claim
 from app.models.settlement import Settlement
 from app.models.status_history import StatusHistory
@@ -22,3 +21,7 @@ from app.models.cc_email import CcEmail
 from app.models.summary_prompt_template import SummaryPromptTemplate
 from app.models.feature import Feature
 from app.models.part_d_letter import PartDLetter
+from app.models.pre_auth_patient import PreAuthPatient
+from app.models.pre_auth_treatment import PreAuthTreatment
+from app.models.pre_auth_hospitalization import PreAuthHospitalization
+from app.models.claim_bill_item import ClaimBillItem

@@ -9,7 +9,7 @@ class QueryLog(Base):
     __tablename__ = "query_logs"
 
     id = Column(BigInteger, primary_key=True, autoincrement=True)
-    claim_case_id = Column(UUID(as_uuid=True), ForeignKey("claim_cases.id"), nullable=False)
+    claim_case_id = Column(UUID(as_uuid=True), ForeignKey("hospitalization.id"), nullable=False)
     query_type = Column(String, nullable=False)  # ADR_NMI (additional docs / need more info)
     query_details = Column(Text, nullable=True)
     documents_requested = Column(Text, nullable=True)

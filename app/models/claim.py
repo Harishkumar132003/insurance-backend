@@ -9,7 +9,7 @@ class Claim(Base):
     __tablename__ = "claims"
 
     id = Column(BigInteger, primary_key=True, autoincrement=True)
-    claim_case_id = Column(UUID(as_uuid=True), ForeignKey("claim_cases.id"), unique=True, nullable=False)
+    claim_case_id = Column(UUID(as_uuid=True), ForeignKey("hospitalization.id"), unique=True, nullable=False)
     claimed_amount = Column(Numeric(12, 2), nullable=False)
     approved_amount = Column(Numeric(12, 2), nullable=True)
     status = Column(String, nullable=False, default="SUBMITTED")

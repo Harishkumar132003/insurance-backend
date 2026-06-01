@@ -50,7 +50,9 @@ class StatusHistoryItem(BaseModel):
 
 class FormDataItem(BaseModel):
     id: int
-    data_json: dict[str, Any]
+    # Composed from the typed pre_auth_* tables by the controller (set as a
+    # transient `.sections` attribute before serialization).
+    sections: dict[str, Any] = {}
     status: str
     created_at: datetime
     updated_at: datetime | None = None
@@ -167,7 +169,8 @@ class ClaimCaseExtractedDataUpdate(BaseModel):
 class ClaimCaseSubmitForm(BaseModel):
     uhid: str
     policy_provider_id: UUID
-    data_json: dict[str, Any]
+    # Nested pre-auth sections: {patient_insured, treating_doctor, hospitalization}
+    sections: dict[str, Any]
 
 
 class ClaimCaseSubmitFormResponse(BaseModel):
