@@ -14,6 +14,7 @@ from app.models.policy_provider_config import PolicyProviderConfig
 from app.models.query_log import QueryLog
 from app.models.status_history import StatusHistory
 from app.models.pre_auth_patient import PreAuthPatient
+from app.models.invoice import Invoice
 from app.utils.pre_auth_sections import compose_sections
 
 
@@ -112,6 +113,15 @@ def get_all_claims(
             float(claim.approved_amount) if claim and claim.approved_amount is not None else None
         )
 
+        # Invoice status (post-claim-approval). Null when no invoice has been
+        # raised yet. Drives the Invoice pill on the Claim Tracker card.
+        invoice_row = (
+            db.query(Invoice).filter(Invoice.claim_case_id == cc.id).first()
+            if claim_approved_amount and claim_approved_amount > 0
+            else None
+        )
+        invoice_status = invoice_row.status if invoice_row else None
+
         # Get provider details
         provider_name = None
         provider_id_str = None
@@ -144,6 +154,7 @@ def get_all_claims(
             "approved_amount": float(cc.approved_amount) if cc.approved_amount is not None else None,
             "claim_raised_amount": claim_raised_amount,
             "claim_approved_amount": claim_approved_amount,
+            "invoice_status": invoice_status,
             "status": cc.claim_status or cc.status,
             "workflow_status": cc.status,
             "awaiting_provider_action": cc.status in AWAITING_PROVIDER_STATUSES,
@@ -261,6 +272,38 @@ def get_claim_case(db: Session, claim_case_id, current_user=None) -> ClaimCase:
         if existing_claim
         else None
     )
+
+    # Invoice snapshot (one per case; created post-claim-approval). FE uses
+    # this to decide between the "Raise Invoice" CTA and the invoice card.
+    invoice_row = (
+        db.query(Invoice).filter(Invoice.claim_case_id == claim_case.id).first()
+    )
+    if invoice_row is not None:
+        paid_total = float(sum(
+            (p.amount for p in invoice_row.payments if p.amount is not None),
+            0,
+        ))
+        claim_case.invoice = {
+            "id": invoice_row.id,
+            "insurer_invoice_id": invoice_row.insurer_invoice_id,
+            "insurer_amount": float(invoice_row.insurer_amount) if invoice_row.insurer_amount is not None else None,
+            "reference_id": invoice_row.reference_id,
+            "status": invoice_row.status,
+            "paid_total": paid_total,
+            "created_at": invoice_row.created_at.isoformat() if invoice_row.created_at else None,
+            "payments": [
+                {
+                    "id": p.id,
+                    "payment_date": p.payment_date.isoformat() if p.payment_date else None,
+                    "amount": float(p.amount) if p.amount is not None else None,
+                    "note": p.note,
+                    "sort_order": p.sort_order,
+                }
+                for p in invoice_row.payments
+            ],
+        }
+    else:
+        claim_case.invoice = None
 
     claim_case.summary = {
         "patient_name": summary_patient.patient_name if summary_patient else None,
