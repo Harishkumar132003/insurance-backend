@@ -13,6 +13,9 @@ from app.models.cc_email import CcEmail
 from app.models.policy_provider_config import PolicyProviderConfig
 from app.models.query_log import QueryLog
 from app.models.status_history import StatusHistory
+from app.models.pre_auth_patient import PreAuthPatient
+from app.models.invoice import Invoice
+from app.utils.pre_auth_sections import compose_sections
 
 
 def get_all_claims(
@@ -55,10 +58,8 @@ def get_all_claims(
         patient_name_match = (
             sa.exists()
             .where(FormData.claim_case_id == ClaimCase.id)
-            .where(
-                FormData.data_json["patient_insured"]["patient_name"]
-                .astext.ilike(needle)
-            )
+            .where(PreAuthPatient.form_data_id == FormData.id)
+            .where(PreAuthPatient.patient_name.ilike(needle))
         )
         query = query.filter(
             sa.or_(ClaimCase.uhid.ilike(needle), patient_name_match)
@@ -82,26 +83,23 @@ def get_all_claims(
         form_data = (
             db.query(FormData)
             .filter(FormData.claim_case_id == cc.id)
-            .filter(sa.or_(
-                FormData.data_json.is_(None),
-                FormData.data_json["stage"].astext.is_(None),
-                FormData.data_json["stage"].astext != "CLAIM",
-            ))
+            .filter(FormData.stage != "CLAIM")
             .order_by(FormData.created_at.desc())
             .first()
         )
-        if form_data and form_data.data_json:
-            dj = form_data.data_json
-            patient_insured = dj.get("patient_insured", {}) or {}
-            patient_name = patient_insured.get("patient_name")
-            age = patient_insured.get("age_years") or patient_insured.get("age")
-            gender = patient_insured.get("gender")
-            hospitalization = dj.get("hospitalization", {}) or {}
-            costs = hospitalization.get("costs", {}) or {}
-            amount = costs.get("total_cost")
-            treating_doctor = dj.get("treating_doctor", {}) or {}
-            diagnosis = treating_doctor.get("provisional_diagnosis") or treating_doctor.get("diagnosis")
-            icd_10 = treating_doctor.get("icd10_code") or treating_doctor.get("icd_10")
+        if form_data is not None:
+            p = form_data.patient
+            t = form_data.treatment
+            h = form_data.hospitalization
+            if p is not None:
+                patient_name = p.patient_name
+                age = p.age_years
+                gender = p.gender
+            if h is not None and h.total_cost is not None:
+                amount = float(h.total_cost)
+            if t is not None:
+                diagnosis = t.provisional_diagnosis
+                icd_10 = t.icd10_code
 
         # Get claimed_amount from Claim if it exists
         claim = db.query(Claim).filter(Claim.claim_case_id == cc.id).first()
@@ -114,6 +112,15 @@ def get_all_claims(
         claim_approved_amount = (
             float(claim.approved_amount) if claim and claim.approved_amount is not None else None
         )
+
+        # Invoice status (post-claim-approval). Null when no invoice has been
+        # raised yet. Drives the Invoice pill on the Claim Tracker card.
+        invoice_row = (
+            db.query(Invoice).filter(Invoice.claim_case_id == cc.id).first()
+            if claim_approved_amount and claim_approved_amount > 0
+            else None
+        )
+        invoice_status = invoice_row.status if invoice_row else None
 
         # Get provider details
         provider_name = None
@@ -147,6 +154,7 @@ def get_all_claims(
             "approved_amount": float(cc.approved_amount) if cc.approved_amount is not None else None,
             "claim_raised_amount": claim_raised_amount,
             "claim_approved_amount": claim_approved_amount,
+            "invoice_status": invoice_status,
             "status": cc.claim_status or cc.status,
             "workflow_status": cc.status,
             "awaiting_provider_action": cc.status in AWAITING_PROVIDER_STATUSES,
@@ -230,32 +238,24 @@ def get_claim_case(db: Session, claim_case_id, current_user=None) -> ClaimCase:
     cc_emails = cc_query.filter(sa.or_(*filters)).all()
     claim_case.cc_emails = [cc.email for cc in cc_emails]
 
-    # Build summary from the latest form_data (key names vary across templates,
-    # so search the JSON recursively for the first matching field).
-    # Claim raise inserts a FormData row tagged stage='CLAIM' holding the bill
-    # breakdown — it has no requested_amount / total_cost fields. The patient /
-    # diagnosis / requested-amount summary on this endpoint is about the
-    # PRE_AUTH form, so skip claim-stage form_data rows when picking the latest.
+    # Build the summary from the latest PRE_AUTH form row (skip claim-stage
+    # rows, which hold the bill breakdown rather than patient/diagnosis data).
     latest_form = (
         db.query(FormData)
         .filter(FormData.claim_case_id == claim_case.id)
-        .filter(sa.or_(
-            FormData.data_json.is_(None),
-            FormData.data_json["stage"].astext.is_(None),
-            FormData.data_json["stage"].astext != "CLAIM",
-        ))
+        .filter(FormData.stage != "CLAIM")
         .order_by(FormData.created_at.desc())
         .first()
     )
-    data = latest_form.data_json if latest_form and latest_form.data_json else {}
-    requested_amount = _find_first_value(
-        data,
-        {"requested_amount", "total_cost", "total_amount", "claim_amount", "estimated_amount"},
+    # Summary now reads from the typed pre-auth tables of the latest form.
+    summary_patient = latest_form.patient if latest_form else None
+    summary_treatment = latest_form.treatment if latest_form else None
+    summary_hosp = latest_form.hospitalization if latest_form else None
+    requested_amount = (
+        float(summary_hosp.total_cost)
+        if summary_hosp is not None and summary_hosp.total_cost is not None
+        else None
     )
-    try:
-        requested_amount = float(requested_amount) if requested_amount is not None else None
-    except (TypeError, ValueError):
-        requested_amount = None
 
     # Flag whether a Claim row has been raised against this case so the FE can
     # toggle the "Raise Claim" vs "View Claim" CTA without a separate request.
@@ -273,20 +273,52 @@ def get_claim_case(db: Session, claim_case_id, current_user=None) -> ClaimCase:
         else None
     )
 
+    # Invoice snapshot (one per case; created post-claim-approval). FE uses
+    # this to decide between the "Raise Invoice" CTA and the invoice card.
+    invoice_row = (
+        db.query(Invoice).filter(Invoice.claim_case_id == claim_case.id).first()
+    )
+    if invoice_row is not None:
+        paid_total = float(sum(
+            (p.amount for p in invoice_row.payments if p.amount is not None),
+            0,
+        ))
+        claim_case.invoice = {
+            "id": invoice_row.id,
+            "insurer_invoice_id": invoice_row.insurer_invoice_id,
+            "insurer_amount": float(invoice_row.insurer_amount) if invoice_row.insurer_amount is not None else None,
+            "reference_id": invoice_row.reference_id,
+            "status": invoice_row.status,
+            "paid_total": paid_total,
+            "created_at": invoice_row.created_at.isoformat() if invoice_row.created_at else None,
+            "payments": [
+                {
+                    "id": p.id,
+                    "payment_date": p.payment_date.isoformat() if p.payment_date else None,
+                    "amount": float(p.amount) if p.amount is not None else None,
+                    "note": p.note,
+                    "sort_order": p.sort_order,
+                }
+                for p in invoice_row.payments
+            ],
+        }
+    else:
+        claim_case.invoice = None
+
     claim_case.summary = {
-        "patient_name": _find_first_value(data, {"patient_name", "name"}),
+        "patient_name": summary_patient.patient_name if summary_patient else None,
         "uhid": claim_case.uhid,
         "provider_name": provider.name if provider else None,
-        "diagnosis": _find_first_value(
-            data,
-            {"provisional_diagnosis", "diagnosis", "final_diagnosis"},
-        ),
-        "icd_10": _find_first_value(
-            data,
-            {"icd10_code", "icd_10_code", "icd_10", "icd10", "icd"},
-        ),
+        "diagnosis": summary_treatment.provisional_diagnosis if summary_treatment else None,
+        "icd_10": summary_treatment.icd10_code if summary_treatment else None,
         "requested_amount": requested_amount,
     }
+
+    # Compose the nested `sections` payload (API shape) onto each form_data row
+    # from its typed pre_auth_* children, so the response carries structured
+    # data instead of data_json.
+    for fd in claim_case.form_data:
+        fd.sections = compose_sections(fd)
 
     # Headline status for the FE card. Compared at the claim level: money
     # approved so far vs the requested/billed amount on the latest form_data.

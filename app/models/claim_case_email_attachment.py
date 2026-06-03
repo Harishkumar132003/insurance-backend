@@ -10,7 +10,7 @@ class ClaimCaseEmailAttachment(Base):
 
     id = Column(BigInteger, primary_key=True, autoincrement=True)
     email_id = Column(BigInteger, ForeignKey("claim_case_emails.id"), nullable=False)
-    claim_case_id = Column(UUID(as_uuid=True), ForeignKey("claim_cases.id"), nullable=False)
+    claim_case_id = Column(UUID(as_uuid=True), ForeignKey("hospitalization.id"), nullable=False)
     original_filename = Column(String, nullable=False)
     stored_filename = Column(String, nullable=False)
     file_path = Column(String, nullable=False)

@@ -8,7 +8,12 @@ from app.db.base import Base
 
 
 class ClaimCase(Base):
-    __tablename__ = "claim_cases"
+    # Hub table — renamed from `claim_cases`. Holds the patient's
+    # hospitalisation case through its full lifecycle (pre-auth → claim →
+    # settlement). The model class name stays `ClaimCase` to avoid churning
+    # ~all controllers/routes/frontend that depend on the `claim_case_id` /
+    # `cc.*` field naming.
+    __tablename__ = "hospitalization"
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     uhid = Column(String, nullable=False)
@@ -23,7 +28,6 @@ class ClaimCase(Base):
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
 
-    pre_auth = relationship("PreAuth", back_populates="claim_case", uselist=False)
     claim = relationship("Claim", back_populates="claim_case", uselist=False)
     status_history = relationship("StatusHistory", back_populates="claim_case")
     form_data = relationship("FormData", back_populates="claim_case")

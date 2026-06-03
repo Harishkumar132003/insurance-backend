@@ -32,6 +32,7 @@ from app.routes.cc_email_routes import router as cc_email_router
 from app.routes.summary_prompt_template_routes import router as summary_prompt_template_router
 from app.routes.feature_routes import router as feature_router
 from app.routes.events_routes import router as events_router
+from app.routes.invoice_routes import router as invoice_router
 from app.services.event_hub import event_hub
 from app.models.summary_prompt_template import SummaryPromptTemplate
 from sqlalchemy.orm import Session
@@ -42,7 +43,7 @@ def _run_migrations():
     alter_statements = [
         "ALTER TABLE policy_provider_configs ADD COLUMN IF NOT EXISTS email VARCHAR",
         "ALTER TABLE claim_case_emails ADD COLUMN IF NOT EXISTS email_type VARCHAR",
-        "ALTER TABLE claim_cases ADD COLUMN IF NOT EXISTS approved_amount NUMERIC(12,2)",
+        "ALTER TABLE hospitalization ADD COLUMN IF NOT EXISTS approved_amount NUMERIC(12,2)",
         "ALTER TABLE claim_case_documents ADD COLUMN IF NOT EXISTS document_type VARCHAR",
         "ALTER TABLE claim_case_email_attachments ADD COLUMN IF NOT EXISTS document_type VARCHAR",
         # Allow Part-D drafts (pre-approval). One UNIQUE per approval-bound
@@ -179,6 +180,7 @@ app.include_router(cc_email_router, prefix="/api/v1")
 app.include_router(summary_prompt_template_router, prefix="/api/v1")
 app.include_router(feature_router, prefix="/api/v1")
 app.include_router(events_router, prefix="/api/v1")
+app.include_router(invoice_router, prefix="/api/v1")
 
 
 @app.get("/health")

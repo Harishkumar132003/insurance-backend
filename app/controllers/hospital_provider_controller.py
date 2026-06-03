@@ -177,7 +177,11 @@ def create_mapping(
             tpa_name=tpa_name,
             tpa_toll_free_phone=tpa_toll_free_phone,
             tpa_toll_free_fax=tpa_toll_free_fax,
-            is_onboarded=True,
+            # Starts off non-onboarded — gets flipped to True automatically
+            # when an INSURANCE_PROVIDER user is created for this provider
+            # (see user_controller). Until then, the system treats the
+            # provider as external (sends pre-auth / claim via email).
+            is_onboarded=False,
             config={"auth": None, "steps": [], "required_fields": []},
         )
         db.add(provider)

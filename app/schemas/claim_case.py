@@ -50,7 +50,9 @@ class StatusHistoryItem(BaseModel):
 
 class FormDataItem(BaseModel):
     id: int
-    data_json: dict[str, Any]
+    # Composed from the typed pre_auth_* tables by the controller (set as a
+    # transient `.sections` attribute before serialization).
+    sections: dict[str, Any] = {}
     status: str
     created_at: datetime
     updated_at: datetime | None = None
@@ -124,6 +126,10 @@ class ClaimCaseDetailResponse(BaseModel):
     # by the pre-auth detail page so it can display claim totals without making
     # a separate /claim request.
     claim_summary: dict | None = None
+    # Invoice snapshot — null until the hospital raises an invoice on a
+    # claim-approved case. Carries enough info for the detail page to render
+    # the invoice card + payment list without a second round-trip.
+    invoice: dict | None = None
 
     model_config = {"from_attributes": True}
 
@@ -167,7 +173,8 @@ class ClaimCaseExtractedDataUpdate(BaseModel):
 class ClaimCaseSubmitForm(BaseModel):
     uhid: str
     policy_provider_id: UUID
-    data_json: dict[str, Any]
+    # Nested pre-auth sections: {patient_insured, treating_doctor, hospitalization}
+    sections: dict[str, Any]
 
 
 class ClaimCaseSubmitFormResponse(BaseModel):
@@ -196,6 +203,9 @@ class ClaimListItem(BaseModel):
     # distinct from claim_cases.approved_amount (pre-auth cumulative).
     claim_raised_amount: float | None = None
     claim_approved_amount: float | None = None
+    # Invoice (post-claim-approval) status: INVOICE_RAISED | PAID | UNPAID.
+    # Null when no invoice has been raised yet for this case.
+    invoice_status: str | None = None
     status: str | None = None
     workflow_status: str | None = None
     # True when this case's workflow status is one of the AWAITING_PROVIDER

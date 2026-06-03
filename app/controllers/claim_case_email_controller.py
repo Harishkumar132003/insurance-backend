@@ -1,3 +1,4 @@
+import logging
 import math
 from datetime import datetime, timezone
 
@@ -11,11 +12,14 @@ from app.models.claim_case import ClaimCase
 from app.models.claim_case_email import ClaimCaseEmail
 from app.models.claim_case_email_attachment import ClaimCaseEmailAttachment
 from app.models.form_data import FormData
+from app.models.pre_auth_patient import PreAuthPatient
 from app.models.hospital import Hospital
 from app.models.policy_provider_config import PolicyProviderConfig
 from app.models.query_log import QueryLog
 from app.models.status_history import StatusHistory
 from app.utils.file_storage import get_attachment_full_path, save_attachment
+
+logger = logging.getLogger(__name__)
 
 
 def get_uncategorized_count(db: Session, hospital_id) -> dict:
@@ -69,10 +73,8 @@ def get_all_claim_case_emails(
             patient_name_match = (
                 sa.exists()
                 .where(FormData.claim_case_id == ClaimCase.id)
-                .where(
-                    FormData.data_json["patient_insured"]["patient_name"]
-                    .astext.ilike(needle)
-                )
+                .where(PreAuthPatient.form_data_id == FormData.id)
+                .where(PreAuthPatient.patient_name.ilike(needle))
             )
             query = query.filter(
                 sa.or_(ClaimCase.uhid.ilike(needle), patient_name_match)
@@ -134,7 +136,7 @@ def get_all_claim_case_emails(
             .subquery()
         )
         fd_rows = (
-            db.query(FormData.claim_case_id, FormData.data_json)
+            db.query(FormData.claim_case_id, PreAuthPatient.patient_name)
             .join(
                 latest_fd_subq,
                 sa.and_(
@@ -142,12 +144,11 @@ def get_all_claim_case_emails(
                     FormData.created_at == latest_fd_subq.c.max_ts,
                 ),
             )
+            .outerjoin(PreAuthPatient, PreAuthPatient.form_data_id == FormData.id)
             .all()
         )
-        for cc_id, dj in fd_rows:
-            patient_name_by_case[cc_id] = (
-                (dj or {}).get("patient_insured", {}).get("patient_name")
-            )
+        for cc_id, patient_name in fd_rows:
+            patient_name_by_case[cc_id] = patient_name
 
     items = []
     for row in rows:
@@ -570,15 +571,15 @@ def get_provider_queue(
         form_data = (
             db.query(FormData)
             .filter(FormData.claim_case_id == cc.id)
+            .filter(FormData.stage != "CLAIM")
             .order_by(FormData.created_at.desc())
             .first()
         )
-        if form_data and form_data.data_json:
-            patient_insured = form_data.data_json.get("patient_insured", {}) or {}
-            patient_name = patient_insured.get("patient_name")
-            hospitalization = form_data.data_json.get("hospitalization", {}) or {}
-            costs = hospitalization.get("costs", {}) or {}
-            amount = costs.get("total_cost")
+        if form_data is not None:
+            if form_data.patient is not None:
+                patient_name = form_data.patient.patient_name
+            if form_data.hospitalization is not None and form_data.hospitalization.total_cost is not None:
+                amount = float(form_data.hospitalization.total_cost)
 
         items.append({
             "claim_case_id": cc.id,
@@ -859,6 +860,25 @@ def process_by_provider(
 
     db.commit()
     db.refresh(claim_case)
+
+    # Notify the hospital admin in real time — same SSE event the email poller
+    # publishes when an external provider replies. Without this, an onboarded
+    # provider's in-app decision only surfaces on the hospital's next refresh.
+    # Best-effort: a hub error must never fail the already-committed action.
+    try:
+        from app.services.event_hub import event_hub  # local import avoids circular
+        event_hub.publish_threadsafe(
+            claim_case.hospital_id,
+            {
+                "type": "email.received",
+                "claim_case_id": str(claim_case.id),
+                "subject": synthetic_email.subject,
+                "from_email": synthetic_email.from_email,
+            },
+        )
+    except Exception as _publish_err:  # pragma: no cover — defensive
+        logger.warning(f"event_hub publish failed (non-fatal): {_publish_err}")
+
     return claim_case
 
 

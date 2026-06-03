@@ -7,11 +7,12 @@ from pydantic import BaseModel
 
 class FormDataCreate(BaseModel):
     claim_case_id: UUID | None = None
-    data_json: dict[str, Any]
+    # Nested pre-auth sections: {patient_insured, treating_doctor, hospitalization}
+    sections: dict[str, Any]
 
 
 class FormDataUpdate(BaseModel):
-    data_json: dict[str, Any]
+    sections: dict[str, Any]
 
 
 class FormDataResponse(BaseModel):
@@ -24,7 +25,7 @@ class FormDataResponse(BaseModel):
 class FormDataDetailResponse(BaseModel):
     id: int
     claim_case_id: UUID | None = None
-    data_json: dict[str, Any]
+    sections: dict[str, Any] = {}
     status: str
     created_at: datetime
     updated_at: datetime | None = None
