@@ -151,31 +151,34 @@ CREATE TABLE IF NOT EXISTS claim_bill_item (
 CREATE INDEX IF NOT EXISTS ix_claim_bill_item_form_data_id
   ON claim_bill_item(form_data_id);
 
--- 7. Invoice (one per case; raised after a claim is approved)
+-- 7. Invoice (one per case; raised after a claim is approved). Status is
+--    auto-derived from payments (PAID / PARTIALLY_PAID / UNPAID).
 CREATE TABLE IF NOT EXISTS invoice (
     id                  BIGSERIAL PRIMARY KEY,
     claim_case_id       UUID NOT NULL UNIQUE
                           REFERENCES hospitalization(id) ON DELETE CASCADE,
     insurer_invoice_id  VARCHAR NOT NULL,
     insurer_amount      NUMERIC(12,2) NOT NULL,
-    reference_id        VARCHAR,
-    status              VARCHAR NOT NULL DEFAULT 'INVOICE_RAISED',
-                          -- INVOICE_RAISED | PAID | UNPAID
+    status              VARCHAR NOT NULL DEFAULT 'UNPAID',
+                          -- PAID | PARTIALLY_PAID | UNPAID
     created_by_user_id  UUID REFERENCES users(id),
     created_at          TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at          TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS ix_invoice_status ON invoice(status);
 
--- 8. Invoice payment line items (N per invoice)
+-- 8. Invoice payment line items (N per invoice; each row has its own
+--    reference_id, UTR / settlement id / etc.).
 CREATE TABLE IF NOT EXISTS invoice_payment (
     id            BIGSERIAL PRIMARY KEY,
     invoice_id    BIGINT NOT NULL REFERENCES invoice(id) ON DELETE CASCADE,
     payment_date  DATE NOT NULL,
     amount        NUMERIC(12,2) NOT NULL,
+    reference_id  VARCHAR,
     note          TEXT,
     sort_order    INTEGER NOT NULL DEFAULT 0,
-    created_at    TIMESTAMPTZ NOT NULL DEFAULT now()
+    created_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at    TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS ix_invoice_payment_invoice_id
   ON invoice_payment(invoice_id);

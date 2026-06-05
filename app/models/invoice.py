@@ -8,9 +8,12 @@ from app.db.base import Base
 class Invoice(Base):
     """Internal invoice raised by the hospital against an approved claim.
 
-    One invoice per claim case. Status is fully manual:
-      INVOICE_RAISED → PAID | UNPAID. PAID/UNPAID are reversible by the user.
-    Payments live in `invoice_payment` (N per invoice).
+    One invoice per claim case. Status is auto-derived from payments:
+      sum(payments) == 0              → UNPAID
+      0 < sum < insurer_amount        → PARTIALLY_PAID
+      sum >= insurer_amount           → PAID
+    Payments live in `invoice_payment` (N per invoice). Each payment carries
+    its own reference_id (UTR / settlement id / etc.).
     """
     __tablename__ = "invoice"
 
@@ -23,8 +26,7 @@ class Invoice(Base):
     )
     insurer_invoice_id = Column(String, nullable=False)
     insurer_amount = Column(Numeric(12, 2), nullable=False)
-    reference_id = Column(String, nullable=True)
-    status = Column(String, nullable=False, default="INVOICE_RAISED")
+    status = Column(String, nullable=False, default="UNPAID")
     created_by_user_id = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
