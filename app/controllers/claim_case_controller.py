@@ -287,7 +287,6 @@ def get_claim_case(db: Session, claim_case_id, current_user=None) -> ClaimCase:
             "id": invoice_row.id,
             "insurer_invoice_id": invoice_row.insurer_invoice_id,
             "insurer_amount": float(invoice_row.insurer_amount) if invoice_row.insurer_amount is not None else None,
-            "reference_id": invoice_row.reference_id,
             "status": invoice_row.status,
             "paid_total": paid_total,
             "created_at": invoice_row.created_at.isoformat() if invoice_row.created_at else None,
@@ -296,6 +295,7 @@ def get_claim_case(db: Session, claim_case_id, current_user=None) -> ClaimCase:
                     "id": p.id,
                     "payment_date": p.payment_date.isoformat() if p.payment_date else None,
                     "amount": float(p.amount) if p.amount is not None else None,
+                    "reference_id": p.reference_id,
                     "note": p.note,
                     "sort_order": p.sort_order,
                 }
@@ -790,6 +790,13 @@ def cancel_claim_case(
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Draft cases cannot be cancelled — delete the draft instead",
+        )
+    # Once an invoice has been raised the case is in the settlement-tracking
+    # phase; cancellation no longer makes sense.
+    if db.query(Invoice).filter(Invoice.claim_case_id == claim_case.id).first():
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Cannot cancel — an invoice has already been raised for this case",
         )
     # The effective "are we waiting on the provider?" signal is the latest
     # status_history entry, NOT claim_case.status: on pre-auth the raw status

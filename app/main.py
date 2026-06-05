@@ -33,6 +33,7 @@ from app.routes.summary_prompt_template_routes import router as summary_prompt_t
 from app.routes.feature_routes import router as feature_router
 from app.routes.events_routes import router as events_router
 from app.routes.invoice_routes import router as invoice_router
+from app.routes.dashboard_routes import router as dashboard_router
 from app.services.event_hub import event_hub
 from app.models.summary_prompt_template import SummaryPromptTemplate
 from sqlalchemy.orm import Session
@@ -57,6 +58,46 @@ def _run_migrations():
         "CREATE UNIQUE INDEX IF NOT EXISTS uq_part_d_letter_draft "
         "ON part_d_letters (claim_case_id) "
         "WHERE claim_case_email_id IS NULL",
+        # Invoice flow — move reference_id from invoice → invoice_payment,
+        # and re-derive status from payments using the new enum
+        # (PAID / PARTIALLY_PAID / UNPAID). Each statement is idempotent.
+        "ALTER TABLE invoice_payment ADD COLUMN IF NOT EXISTS reference_id VARCHAR",
+        "ALTER TABLE invoice_payment "
+        "ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT now()",
+        # Backfill earliest payment per invoice from invoice.reference_id,
+        # then drop the old column. The DO block guards against re-runs.
+        """
+        DO $$
+        BEGIN
+          IF EXISTS (
+            SELECT 1 FROM information_schema.columns
+            WHERE table_name = 'invoice' AND column_name = 'reference_id'
+          ) THEN
+            UPDATE invoice_payment ip
+            SET reference_id = i.reference_id
+            FROM invoice i
+            WHERE ip.invoice_id = i.id
+              AND ip.sort_order = 0
+              AND ip.reference_id IS NULL
+              AND i.reference_id IS NOT NULL
+              AND TRIM(i.reference_id) <> '';
+
+            ALTER TABLE invoice DROP COLUMN reference_id;
+          END IF;
+        END $$;
+        """,
+        # Re-derive invoice.status from payments using the new enum.
+        """
+        UPDATE invoice i
+        SET status = CASE
+          WHEN (SELECT COALESCE(SUM(amount), 0)
+                FROM invoice_payment WHERE invoice_id = i.id) >= i.insurer_amount
+               AND i.insurer_amount > 0 THEN 'PAID'
+          WHEN (SELECT COALESCE(SUM(amount), 0)
+                FROM invoice_payment WHERE invoice_id = i.id) > 0 THEN 'PARTIALLY_PAID'
+          ELSE 'UNPAID'
+        END
+        """,
     ]
     with engine.connect() as conn:
         for stmt in alter_statements:
@@ -181,6 +222,7 @@ app.include_router(summary_prompt_template_router, prefix="/api/v1")
 app.include_router(feature_router, prefix="/api/v1")
 app.include_router(events_router, prefix="/api/v1")
 app.include_router(invoice_router, prefix="/api/v1")
+app.include_router(dashboard_router, prefix="/api/v1")
 
 
 @app.get("/health")

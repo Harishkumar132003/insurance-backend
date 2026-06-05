@@ -2,14 +2,15 @@
 
 A case enters the invoice stage when its `claims.approved_amount > 0`. The
 hospital admin raises ONE invoice per case capturing what was billed to the
-insurer + (optionally) the payments collected against it. Status transitions
-(INVOICE_RAISED ↔ PAID ↔ UNPAID) are fully manual — payments don't drive
-status. This is a pure internal record: no email, no provider interaction.
+insurer + the payments collected against it. Status (PAID / PARTIALLY_PAID /
+UNPAID) is auto-derived from the sum of payments and the insurer amount on
+every write. This is a pure internal record: no email, no provider interaction.
 """
 
 from decimal import Decimal
 from uuid import UUID
 
+import sqlalchemy as sa
 from fastapi import HTTPException, status as http_status
 from sqlalchemy.orm import Session
 
@@ -22,10 +23,10 @@ from app.models.pre_auth_patient import PreAuthPatient
 from app.models.form_data import FormData
 from app.models.user import User
 from app.schemas.invoice import (
-    INVOICE_STATUSES,
     InvoiceCreate,
     InvoiceListItem,
     InvoicePaymentIn,
+    InvoicePaymentUpdate,
     InvoiceResponse,
 )
 
@@ -58,6 +59,44 @@ def _patient_name(db: Session, claim_case_id) -> str | None:
 
 def _serialize_invoice(invoice: Invoice) -> InvoiceResponse:
     return InvoiceResponse.model_validate(invoice)
+
+
+def _derive_status(invoice: Invoice) -> str:
+    """Compute invoice.status from its payments. Called after every write."""
+    paid_total = sum(
+        (Decimal(str(p.amount)) for p in invoice.payments if p.amount is not None),
+        Decimal("0"),
+    )
+    insurer = Decimal(str(invoice.insurer_amount or 0))
+    if paid_total <= 0:
+        return "UNPAID"
+    if insurer > 0 and paid_total >= insurer:
+        return "PAID"
+    return "PARTIALLY_PAID"
+
+
+def _recompute_status(invoice: Invoice) -> None:
+    invoice.status = _derive_status(invoice)
+
+
+def _validate_payment_amount(amount) -> None:
+    if amount is None or Decimal(str(amount)) <= 0:
+        raise HTTPException(
+            status_code=http_status.HTTP_400_BAD_REQUEST,
+            detail="Payment amount must be greater than zero",
+        )
+
+
+def _get_invoice_or_404(db: Session, claim_case_id: UUID) -> Invoice:
+    invoice = (
+        db.query(Invoice).filter(Invoice.claim_case_id == claim_case_id).first()
+    )
+    if not invoice:
+        raise HTTPException(
+            status_code=http_status.HTTP_404_NOT_FOUND,
+            detail="No invoice raised for this case yet",
+        )
+    return invoice
 
 
 def get_invoice_for_case(
@@ -125,34 +164,30 @@ def create_invoice(
         claim_case_id=claim_case_id,
         insurer_invoice_id=payload.insurer_invoice_id.strip(),
         insurer_amount=payload.insurer_amount,
-        reference_id=(payload.reference_id or None),
-        status="INVOICE_RAISED",
+        status="UNPAID",
         created_by_user_id=current_user.id,
     )
     db.add(invoice)
     db.flush()
 
     for idx, pay in enumerate(payload.payments or []):
-        _validate_payment(pay)
+        _validate_payment_amount(pay.amount)
         db.add(InvoicePayment(
             invoice_id=invoice.id,
             payment_date=pay.payment_date,
             amount=pay.amount,
-            note=(pay.note or None),
+            reference_id=(pay.reference_id or "").strip() or None,
+            note=(pay.note or "").strip() or None,
             sort_order=idx,
         ))
+
+    db.flush()
+    db.refresh(invoice)
+    _recompute_status(invoice)
 
     db.commit()
     db.refresh(invoice)
     return _serialize_invoice(invoice)
-
-
-def _validate_payment(payment: InvoicePaymentIn) -> None:
-    if Decimal(str(payment.amount)) <= 0:
-        raise HTTPException(
-            status_code=http_status.HTTP_400_BAD_REQUEST,
-            detail="Payment amount must be greater than zero",
-        )
 
 
 def add_payment(
@@ -168,16 +203,9 @@ def add_payment(
             detail="Claim case not found",
         )
     _scope_to_hospital(claim_case, current_user)
-    invoice = (
-        db.query(Invoice).filter(Invoice.claim_case_id == claim_case_id).first()
-    )
-    if not invoice:
-        raise HTTPException(
-            status_code=http_status.HTTP_404_NOT_FOUND,
-            detail="No invoice raised for this case yet",
-        )
+    invoice = _get_invoice_or_404(db, claim_case_id)
 
-    _validate_payment(payment)
+    _validate_payment_amount(payment.amount)
     next_sort = (
         db.query(InvoicePayment.sort_order)
         .filter(InvoicePayment.invoice_id == invoice.id)
@@ -190,18 +218,24 @@ def add_payment(
         invoice_id=invoice.id,
         payment_date=payment.payment_date,
         amount=payment.amount,
-        note=(payment.note or None),
+        reference_id=(payment.reference_id or "").strip() or None,
+        note=(payment.note or "").strip() or None,
         sort_order=sort_order,
     ))
+    db.flush()
+    db.refresh(invoice)
+    _recompute_status(invoice)
+
     db.commit()
     db.refresh(invoice)
     return _serialize_invoice(invoice)
 
 
-def update_reference(
+def update_payment(
     db: Session,
     claim_case_id: UUID,
-    reference_id: str | None,
+    payment_id: int,
+    payload: InvoicePaymentUpdate,
     current_user: User,
 ) -> InvoiceResponse:
     claim_case = db.query(ClaimCase).filter(ClaimCase.id == claim_case_id).first()
@@ -211,34 +245,46 @@ def update_reference(
             detail="Claim case not found",
         )
     _scope_to_hospital(claim_case, current_user)
-    invoice = (
-        db.query(Invoice).filter(Invoice.claim_case_id == claim_case_id).first()
+    invoice = _get_invoice_or_404(db, claim_case_id)
+
+    payment = (
+        db.query(InvoicePayment)
+        .filter(InvoicePayment.id == payment_id, InvoicePayment.invoice_id == invoice.id)
+        .first()
     )
-    if not invoice:
+    if not payment:
         raise HTTPException(
             status_code=http_status.HTTP_404_NOT_FOUND,
-            detail="No invoice raised for this case yet",
+            detail="Payment not found",
         )
 
-    cleaned = (reference_id or "").strip() or None
-    invoice.reference_id = cleaned
+    fields = payload.model_fields_set
+    if "payment_date" in fields and payload.payment_date is not None:
+        payment.payment_date = payload.payment_date
+    if "amount" in fields and payload.amount is not None:
+        _validate_payment_amount(payload.amount)
+        payment.amount = payload.amount
+    if "reference_id" in fields:
+        # Empty/whitespace → clear it.
+        payment.reference_id = (payload.reference_id or "").strip() or None
+    if "note" in fields:
+        payment.note = (payload.note or "").strip() or None
+
+    db.flush()
+    db.refresh(invoice)
+    _recompute_status(invoice)
+
     db.commit()
     db.refresh(invoice)
     return _serialize_invoice(invoice)
 
 
-def update_status(
+def delete_payment(
     db: Session,
     claim_case_id: UUID,
-    new_status: str,
+    payment_id: int,
     current_user: User,
 ) -> InvoiceResponse:
-    if new_status not in INVOICE_STATUSES:
-        raise HTTPException(
-            status_code=http_status.HTTP_400_BAD_REQUEST,
-            detail=f"Invalid status. Must be one of: {', '.join(sorted(INVOICE_STATUSES))}",
-        )
-
     claim_case = db.query(ClaimCase).filter(ClaimCase.id == claim_case_id).first()
     if not claim_case:
         raise HTTPException(
@@ -246,16 +292,24 @@ def update_status(
             detail="Claim case not found",
         )
     _scope_to_hospital(claim_case, current_user)
-    invoice = (
-        db.query(Invoice).filter(Invoice.claim_case_id == claim_case_id).first()
+    invoice = _get_invoice_or_404(db, claim_case_id)
+
+    payment = (
+        db.query(InvoicePayment)
+        .filter(InvoicePayment.id == payment_id, InvoicePayment.invoice_id == invoice.id)
+        .first()
     )
-    if not invoice:
+    if not payment:
         raise HTTPException(
             status_code=http_status.HTTP_404_NOT_FOUND,
-            detail="No invoice raised for this case yet",
+            detail="Payment not found",
         )
 
-    invoice.status = new_status
+    db.delete(payment)
+    db.flush()
+    db.refresh(invoice)
+    _recompute_status(invoice)
+
     db.commit()
     db.refresh(invoice)
     return _serialize_invoice(invoice)
@@ -266,11 +320,14 @@ def list_for_hospital(
     current_user: User,
     *,
     scope: str = "to_invoice",
+    q: str | None = None,
 ) -> list[InvoiceListItem]:
     """List cases relevant to the Raise Invoice tab.
 
     scope='to_invoice' — claim-approved cases with NO invoice yet.
     scope='invoiced'   — cases that already have an invoice.
+    q                  — optional substring filter on uhid / patient_name /
+                         claim_number (and insurer_invoice_id when scope='invoiced').
     """
     if current_user.role != "HOSPITAL_ADMIN":
         raise HTTPException(
@@ -278,7 +335,7 @@ def list_for_hospital(
             detail="Only hospital admins can view the invoice queue",
         )
 
-    q = (
+    query = (
         db.query(ClaimCase, Claim, Invoice)
         .join(Claim, Claim.claim_case_id == ClaimCase.id)
         .outerjoin(Invoice, Invoice.claim_case_id == ClaimCase.id)
@@ -288,16 +345,36 @@ def list_for_hospital(
         .filter(Claim.approved_amount > 0)
     )
     if scope == "to_invoice":
-        q = q.filter(Invoice.id.is_(None))
+        query = query.filter(Invoice.id.is_(None))
     elif scope == "invoiced":
-        q = q.filter(Invoice.id.isnot(None))
+        query = query.filter(Invoice.id.isnot(None))
     else:
         raise HTTPException(
             status_code=http_status.HTTP_400_BAD_REQUEST,
             detail="scope must be 'to_invoice' or 'invoiced'",
         )
 
-    rows = q.order_by(ClaimCase.created_at.desc()).all()
+    # Case-insensitive substring search across uhid / patient_name /
+    # claim_number, plus insurer_invoice_id when the row has an invoice.
+    needle = (q or "").strip()
+    if needle:
+        like = f"%{needle}%"
+        patient_match = (
+            sa.exists()
+            .where(FormData.claim_case_id == ClaimCase.id)
+            .where(PreAuthPatient.form_data_id == FormData.id)
+            .where(PreAuthPatient.patient_name.ilike(like))
+        )
+        clauses = [
+            ClaimCase.uhid.ilike(like),
+            ClaimCase.claim_number.ilike(like),
+            patient_match,
+        ]
+        if scope == "invoiced":
+            clauses.append(Invoice.insurer_invoice_id.ilike(like))
+        query = query.filter(sa.or_(*clauses))
+
+    rows = query.order_by(ClaimCase.created_at.desc()).all()
 
     out: list[InvoiceListItem] = []
     for cc, claim, invoice in rows:
