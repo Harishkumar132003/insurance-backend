@@ -71,7 +71,7 @@ def _find_approval_email(
 
     # Fresh round pending → don't reuse a prior approval's bound Part-D.
     from app.controllers.claim_case_controller import AWAITING_PROVIDER_STATUSES
-    if claim_case.status in AWAITING_PROVIDER_STATUSES:
+    if claim_case.case_status in AWAITING_PROVIDER_STATUSES:
         return None
 
     return (

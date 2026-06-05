@@ -252,7 +252,7 @@ def _process_single_email(db: Session, email_data: dict):
             .filter(ClaimCase.thread_id == thread_id)
             .first()
         )
-        if thread_case and thread_case.status == "CANCELLED":
+        if thread_case and thread_case.case_status == "CANCELLED":
             # The case was cancelled — record the reply against it for audit
             # (so it shows under the right, cancelled case in Query Management)
             # but take no further action: no AI analysis, no status update, no
@@ -264,7 +264,7 @@ def _process_single_email(db: Session, email_data: dict):
                 f"(thread_id={thread_id})"
             )
             return
-        if thread_case and thread_case.status in AWAITING_PROVIDER_STATUSES:
+        if thread_case and thread_case.case_status in AWAITING_PROVIDER_STATUSES:
             claim_case = thread_case
             logger.info(f"Matched ClaimCase #{claim_case.id} by thread_id={thread_id}")
 
@@ -567,7 +567,7 @@ def _match_claim_case(
     if uhid:
         claim_case = (
             db.query(ClaimCase)
-            .filter(ClaimCase.uhid == uhid, ClaimCase.status.in_(AWAITING_PROVIDER_STATUSES))
+            .filter(ClaimCase.uhid == uhid, ClaimCase.case_status.in_(AWAITING_PROVIDER_STATUSES))
             .first()
         )
         if claim_case:
@@ -578,7 +578,7 @@ def _match_claim_case(
     if claim_number:
         claim_case = (
             db.query(ClaimCase)
-            .filter(ClaimCase.claim_number == claim_number, ClaimCase.status.in_(AWAITING_PROVIDER_STATUSES))
+            .filter(ClaimCase.claim_number == claim_number, ClaimCase.case_status.in_(AWAITING_PROVIDER_STATUSES))
             .first()
         )
         if claim_case:
@@ -602,7 +602,7 @@ def _match_claim_case(
         db.query(ClaimCase)
         .filter(
             ClaimCase.policy_provider_id == provider.id,
-            ClaimCase.status.in_(AWAITING_PROVIDER_STATUSES),
+            ClaimCase.case_status.in_(AWAITING_PROVIDER_STATUSES),
         )
         .all()
     )

@@ -36,7 +36,7 @@ def get_all_claims(
         query = query.filter(ClaimCase.hospital_id == hospital_id)
 
     if exclude_draft:
-        query = query.filter(ClaimCase.status != "DRAFT")
+        query = query.filter(ClaimCase.case_status != "DRAFT")
 
     if provider_id:
         query = query.filter(ClaimCase.policy_provider_id == provider_id)
@@ -155,9 +155,9 @@ def get_all_claims(
             "claim_raised_amount": claim_raised_amount,
             "claim_approved_amount": claim_approved_amount,
             "invoice_status": invoice_status,
-            "status": cc.claim_status or cc.status,
-            "workflow_status": cc.status,
-            "awaiting_provider_action": cc.status in AWAITING_PROVIDER_STATUSES,
+            "status": cc.preauth_outcome or cc.case_status,
+            "workflow_status": cc.case_status,
+            "awaiting_provider_action": cc.case_status in AWAITING_PROVIDER_STATUSES,
             "unread_count": unread_count,
             "created_at": cc.created_at,
         })
@@ -326,7 +326,7 @@ def get_claim_case(db: Session, claim_case_id, current_user=None) -> ClaimCase:
     if approved <= 0:
         # No money approved yet — surface the most informative status we have.
         claim_case.main_status = (
-            claim_case.claim_status or claim_case.status or "UNKNOWN"
+            claim_case.preauth_outcome or claim_case.case_status or "UNKNOWN"
         )
     elif requested_amount is not None and approved < float(requested_amount):
         claim_case.main_status = "PARTIALLY_APPROVED"
@@ -338,7 +338,7 @@ def get_claim_case(db: Session, claim_case_id, current_user=None) -> ClaimCase:
     return claim_case
 
 
-# Workflow states on ClaimCase.status
+# Workflow states on ClaimCase.case_status
 AWAITING_PROVIDER_STATUSES = {
     "SUBMITTED", "ENHANCE_SUBMITTED", "RECONSIDER", "ADR_SUBMITTED",
     "CLAIM_SUBMITTED", "CLAIM_ADR_SUBMITTED", "CLAIM_RECONSIDER",
@@ -352,7 +352,7 @@ VALID_STATUSES = {"DRAFT"} | AWAITING_PROVIDER_STATUSES | OUTCOME_STATUSES | {"U
 
 def _ensure_not_cancelled(claim_case: ClaimCase) -> None:
     """Hard-block any write path once the case has been cancelled."""
-    if claim_case is not None and claim_case.status == "CANCELLED":
+    if claim_case is not None and claim_case.case_status == "CANCELLED":
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Case is cancelled — no further action is allowed",
@@ -423,7 +423,7 @@ def update_claim_case_status(
             detail=f"Invalid status '{new_status}'. Must be one of: {', '.join(sorted(VALID_STATUSES))}",
         )
 
-    claim_case.status = new_status
+    claim_case.case_status = new_status
     db.add(StatusHistory(
         claim_case_id=claim_case.id,
         stage="PRE_AUTH",
@@ -542,11 +542,11 @@ def update_extracted_data(
         # Write to the right column.
         if is_claim_stage:
             if applied_status != "UNKNOWN":
-                claim_case.status = CLAIM_OUTCOME_TO_CASE_STATUS[applied_status]
-            # Do NOT touch claim_case.claim_status / .approved_amount — those
+                claim_case.case_status = CLAIM_OUTCOME_TO_CASE_STATUS[applied_status]
+            # Do NOT touch claim_case.preauth_outcome / .approved_amount — those
             # are pre-auth state.
         else:
-            claim_case.claim_status = applied_status
+            claim_case.preauth_outcome = applied_status
 
         # Auto-sync email_type from claim_status only if not explicitly provided.
         type_map = CLAIM_STATUS_TO_EMAIL_TYPE if is_claim_stage else STATUS_TO_EMAIL_TYPE
@@ -578,14 +578,14 @@ def update_extracted_data(
     if applied_status is not None:
         effective_status = applied_status
     elif is_claim_stage:
-        # Reverse-map claim_case.status (CLAIM_*) back to the bare form.
+        # Reverse-map claim_case.case_status (CLAIM_*) back to the bare form.
         effective_status = None
         for bare, prefixed in CLAIM_OUTCOME_TO_CASE_STATUS.items():
-            if claim_case.status == prefixed:
+            if claim_case.case_status == prefixed:
                 effective_status = bare
                 break
     else:
-        effective_status = claim_case.claim_status
+        effective_status = claim_case.preauth_outcome
 
     # The amount approved in THIS round — recorded on the StatusHistory row
     # below (mirrors the provider-action / validate-suggestion behaviour).
@@ -781,12 +781,12 @@ def cancel_claim_case(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Not allowed to cancel this claim case",
         )
-    if claim_case.status == "CANCELLED":
+    if claim_case.case_status == "CANCELLED":
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Case is already cancelled",
         )
-    if claim_case.status == "DRAFT":
+    if claim_case.case_status == "DRAFT":
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Draft cases cannot be cancelled — delete the draft instead",
@@ -799,8 +799,9 @@ def cancel_claim_case(
             detail="Cannot cancel — an invoice has already been raised for this case",
         )
     # The effective "are we waiting on the provider?" signal is the latest
-    # status_history entry, NOT claim_case.status: on pre-auth the raw status
-    # column lags (update_extracted_data only writes claim_status). Status
+    # status_history entry, NOT claim_case.case_status: on pre-auth the raw
+    # case_status column lags (update_extracted_data only writes
+    # preauth_outcome). Status
     # history stores bare statuses (SUBMITTED / ENHANCE_SUBMITTED / RECONSIDER
     # / ADR_SUBMITTED) for both stages.
     latest_history = (
@@ -812,7 +813,7 @@ def cancel_claim_case(
     awaiting_statuses = {
         "SUBMITTED", "ENHANCE_SUBMITTED", "RECONSIDER", "RECONSIDER_SUBMITTED", "ADR_SUBMITTED",
     }
-    effective_status = latest_history.status if latest_history else claim_case.status
+    effective_status = latest_history.status if latest_history else claim_case.case_status
     if effective_status in awaiting_statuses:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -827,8 +828,8 @@ def cancel_claim_case(
     is_onboarded = bool(provider and provider.is_onboarded)
 
     cancelled_at_stage = claim_case.current_stage
-    claim_case.status = "CANCELLED"
-    claim_case.claim_status = "CANCELLED"
+    claim_case.case_status = "CANCELLED"
+    claim_case.preauth_outcome = "CANCELLED"
 
     sent_email_id = None
     if not is_onboarded:

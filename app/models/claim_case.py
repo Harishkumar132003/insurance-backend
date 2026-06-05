@@ -21,8 +21,15 @@ class ClaimCase(Base):
     policy_provider_id = Column(UUID(as_uuid=True), ForeignKey("policy_provider_configs.id"), nullable=False)
     claim_number = Column(String, nullable=True)
     current_stage = Column(String, nullable=False, default="PRE_AUTH")
-    status = Column(String, nullable=False, default="DRAFT")
-    claim_status = Column(String, nullable=True)
+    # case_status — overall case lifecycle/workflow state (pre-auth → claim).
+    # Renamed from `status`; see schemas/claim_case.py which keeps the `status`
+    # JSON key via validation_alias so the API/frontend contract is unchanged.
+    case_status = Column("case_status", String, nullable=False, default="DRAFT")
+    # preauth_outcome — the pre-auth payer decision only (APPROVED / DENIED /
+    # ENHANCEMENT_* / ADR_NMI / UNKNOWN / CANCELLED). Renamed from `claim_status`
+    # (the old name wrongly implied the claim-stage outcome, which actually
+    # lives in case_status as CLAIM_*). API keeps the `claim_status` JSON key.
+    preauth_outcome = Column("preauth_outcome", String, nullable=True)
     approved_amount = Column(Numeric(12, 2), nullable=True)
     thread_id = Column(String, unique=True, nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())

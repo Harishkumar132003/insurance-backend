@@ -2,7 +2,7 @@ from datetime import datetime
 from typing import Any
 from uuid import UUID
 
-from pydantic import BaseModel
+from pydantic import AliasChoices, BaseModel, Field
 
 from app.schemas.claim_case_document import ClaimCaseDocumentResponse
 
@@ -25,13 +25,19 @@ class ClaimCaseResponse(BaseModel):
     claim_number: str | None = None
     thread_id: str | None = None
     current_stage: str
-    status: str
-    claim_status: str | None = None
+    # DB columns were renamed (status → case_status, claim_status →
+    # preauth_outcome). Keep the original JSON keys for the API/frontend by
+    # reading from the new attribute via validation_alias; output uses the
+    # field name, so the response shape is unchanged.
+    status: str = Field(validation_alias=AliasChoices("case_status", "status"))
+    claim_status: str | None = Field(
+        default=None, validation_alias=AliasChoices("preauth_outcome", "claim_status")
+    )
     approved_amount: float | None = None
     created_at: datetime
     updated_at: datetime | None = None
 
-    model_config = {"from_attributes": True}
+    model_config = {"from_attributes": True, "populate_by_name": True}
 
 
 class StatusHistoryItem(BaseModel):
@@ -100,8 +106,12 @@ class ClaimCaseDetailResponse(BaseModel):
     claim_number: str | None = None
     thread_id: str | None = None
     current_stage: str
-    status: str
-    claim_status: str | None = None
+    # See ClaimCaseResponse: JSON keys preserved, values read from the renamed
+    # case_status / preauth_outcome columns via validation_alias.
+    status: str = Field(validation_alias=AliasChoices("case_status", "status"))
+    claim_status: str | None = Field(
+        default=None, validation_alias=AliasChoices("preauth_outcome", "claim_status")
+    )
     approved_amount: float | None = None
     # Headline status derived from approved_amount vs summary.requested_amount:
     #   approved < requested → "PARTIALLY_APPROVED"
@@ -131,7 +141,7 @@ class ClaimCaseDetailResponse(BaseModel):
     # the invoice card + payment list without a second round-trip.
     invoice: dict | None = None
 
-    model_config = {"from_attributes": True}
+    model_config = {"from_attributes": True, "populate_by_name": True}
 
 
 class ClaimCaseEmailListItem(BaseModel):

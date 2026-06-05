@@ -119,7 +119,7 @@ def send_form_email(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Claim case not found",
         )
-    if claim_case.status == "CANCELLED":
+    if claim_case.case_status == "CANCELLED":
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Case is cancelled — no further action is allowed",
@@ -221,7 +221,7 @@ def send_form_email(
         doc.sent_email_id = email_record.id
 
     # 6. Update claim_case status to SUBMITTED (initial entry into provider review)
-    claim_case.status = "SUBMITTED"
+    claim_case.case_status = "SUBMITTED"
     db.add(StatusHistory(
         claim_case_id=claim_case.id,
         stage="PRE_AUTH",
@@ -256,7 +256,7 @@ def send_form_email(
         "message": "Email sent successfully",
         "to_email": to_email,
         "subject": subject,
-        "status": claim_case.status,
+        "status": claim_case.case_status,
     }
 
 
@@ -352,16 +352,16 @@ def send_query_email(
     # Transition the workflow state. Claim-stage replies are driven off the
     # current workflow status (CLAIM_ADR_NMI / CLAIM_DENIED) — they bypass the
     # pre-auth QUERY_RAISE_STATE table so the pre-auth outcome on the row
-    # (`claim_case.claim_status`) is preserved.
+    # (`claim_case.preauth_outcome`) is preserved.
     is_claim_stage = claim_case.current_stage == "CLAIM"
     claim_row = None
     if is_claim_stage:
-        next_state = CLAIM_QUERY_RAISE_STATE.get(claim_case.status)
+        next_state = CLAIM_QUERY_RAISE_STATE.get(claim_case.case_status)
         if not next_state:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail=(
-                    f"Cannot raise claim reply from status '{claim_case.status}'. "
+                    f"Cannot raise claim reply from status '{claim_case.case_status}'. "
                     f"Must be one of: {', '.join(sorted(CLAIM_QUERY_RAISE_STATE))}"
                 ),
             )
@@ -376,16 +376,16 @@ def send_query_email(
     else:
         # Pre-auth: APPROVED / PARTIALLY_APPROVED -> ENHANCE_SUBMITTED,
         #          DENIED -> RECONSIDER, ADR_NMI -> ADR_SUBMITTED.
-        next_state = QUERY_RAISE_STATE.get(claim_case.claim_status)
+        next_state = QUERY_RAISE_STATE.get(claim_case.preauth_outcome)
         if not next_state:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail=(
-                    f"Cannot raise query from claim_status '{claim_case.claim_status}'. "
+                    f"Cannot raise query from preauth_outcome '{claim_case.preauth_outcome}'. "
                     f"Must be one of: {', '.join(sorted(QUERY_RAISE_STATE))}"
                 ),
             )
-    claim_case.status = next_state
+    claim_case.case_status = next_state
 
     # Persist the email row first so its id is available to link against the
     # StatusHistory row.
@@ -475,7 +475,7 @@ def send_query_email(
         "message": "Query email sent successfully",
         "to_email": to_email,
         "subject": subject,
-        "status": claim_case.status,
+        "status": claim_case.case_status,
     }
 
 

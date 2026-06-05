@@ -122,5 +122,5 @@ def create_claim_and_form_data(
     return {
         "claim_case_id": claim_case.id,
         "form_data_id": form_data.id,
-        "status": claim_case.status,
+        "status": claim_case.case_status,
     }
