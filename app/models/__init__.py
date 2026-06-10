@@ -11,6 +11,8 @@ from app.models.patient import Patient
 from app.models.claim_case import ClaimCase
 from app.models.claim import Claim
 from app.models.settlement import Settlement
+from app.models.settlement_batch import SettlementBatch
+from app.models.settlement_item import SettlementItem
 from app.models.status_history import StatusHistory
 from app.models.email_template import EmailTemplate
 from app.models.query_log import QueryLog
