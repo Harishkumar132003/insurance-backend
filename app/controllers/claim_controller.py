@@ -118,7 +118,7 @@ def raise_claim(
     if not claim_case:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Claim case not found")
     _scope_to_user(claim_case, current_user)
-    if claim_case.status == "CANCELLED":
+    if claim_case.case_status == "CANCELLED":
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Case is cancelled — no further action is allowed",
@@ -279,7 +279,7 @@ def raise_claim(
         ))
 
     claim_case.current_stage = "CLAIM"
-    claim_case.status = "CLAIM_SUBMITTED"
+    claim_case.case_status = "CLAIM_SUBMITTED"
     db.add(StatusHistory(
         claim_case_id=claim_case.id,
         stage="CLAIM",

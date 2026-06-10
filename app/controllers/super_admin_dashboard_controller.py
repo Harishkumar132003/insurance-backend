@@ -78,9 +78,9 @@ def get_super_admin_dashboard(
 def _kpis(db: Session, params: dict) -> SuperAdminKPIs:
     row = db.execute(text("""
         WITH cases AS (
-            SELECT h.id, h.status
+            SELECT h.id, h.case_status AS status
               FROM hospitalization h
-             WHERE h.status <> 'CANCELLED'
+             WHERE h.case_status <> 'CANCELLED'
                AND h.created_at >= :since
                AND h.created_at <  :until
         ),
@@ -162,7 +162,7 @@ def _adoption(db: Session, params: dict) -> AdoptionStats:
         SELECT
             (SELECT count(*) FROM hospitals) AS hospitals_total,
             (SELECT count(DISTINCT hospital_id) FROM hospitalization
-              WHERE status <> 'CANCELLED' AND hospital_id IS NOT NULL) AS hospitals_active,
+              WHERE case_status <> 'CANCELLED' AND hospital_id IS NOT NULL) AS hospitals_active,
             (SELECT count(*) FROM policy_provider_configs) AS providers_total,
             (SELECT count(*) FROM policy_provider_configs WHERE is_onboarded) AS providers_onboarded,
             (SELECT count(*) FROM hospital_provider_mappings WHERE is_active) AS active_mappings,
@@ -180,7 +180,7 @@ def _adoption(db: Session, params: dict) -> AdoptionStats:
             COUNT(*) FILTER (WHERE NOT pp.is_onboarded) AS external
           FROM hospitalization h
           JOIN policy_provider_configs pp ON pp.id = h.policy_provider_id
-         WHERE h.status <> 'CANCELLED'
+         WHERE h.case_status <> 'CANCELLED'
            AND h.created_at >= :since
            AND h.created_at <  :until
     """), params).mappings().first()
@@ -215,7 +215,7 @@ def _funnel(db: Session, params: dict) -> list[FunnelStep]:
             SELECT id FROM hospitalization
              WHERE created_at >= :since
                AND created_at <  :until
-               AND status <> 'CANCELLED'
+               AND case_status <> 'CANCELLED'
         ),
         requested AS (
             SELECT COUNT(DISTINCT pa.claim_case_id) AS cnt,
@@ -291,7 +291,7 @@ def _hospitals(db: Session, params: dict) -> list[HospitalStats]:
             SELECT h.id, h.hospital_id
               FROM hospitalization h
              WHERE h.hospital_id IS NOT NULL
-               AND h.status <> 'CANCELLED'
+               AND h.case_status <> 'CANCELLED'
                AND h.created_at >= :since
                AND h.created_at <  :until
         ),
@@ -379,7 +379,7 @@ def _providers(db: Session, params: dict) -> list[ProviderStats]:
         WITH cases AS (
             SELECT h.id, h.policy_provider_id
               FROM hospitalization h
-             WHERE h.status <> 'CANCELLED'
+             WHERE h.case_status <> 'CANCELLED'
                AND h.created_at >= :since
                AND h.created_at <  :until
         ),
@@ -468,7 +468,7 @@ def _status_distribution(db: Session) -> list[StatusBucket]:
     row = db.execute(text("""
         SELECT
             COUNT(*) FILTER (
-                WHERE h.current_stage = 'PRE_AUTH' AND h.status = 'SUBMITTED'
+                WHERE h.current_stage = 'PRE_AUTH' AND h.case_status = 'SUBMITTED'
             ) AS pre_auth_submitted,
             COUNT(*) FILTER (
                 WHERE h.current_stage = 'PRE_AUTH'
@@ -476,7 +476,7 @@ def _status_distribution(db: Session) -> list[StatusBucket]:
                   AND NOT EXISTS (SELECT 1 FROM claims WHERE claim_case_id = h.id)
             ) AS pre_auth_approved,
             COUNT(*) FILTER (
-                WHERE h.current_stage = 'CLAIM' AND h.status = 'CLAIM_SUBMITTED'
+                WHERE h.current_stage = 'CLAIM' AND h.case_status = 'CLAIM_SUBMITTED'
             ) AS claim_submitted,
             COUNT(*) FILTER (
                 WHERE EXISTS (SELECT 1 FROM claims c WHERE c.claim_case_id = h.id
@@ -488,7 +488,7 @@ def _status_distribution(db: Session) -> list[StatusBucket]:
                                 AND i.status <> 'PAID')
             ) AS invoice_open
           FROM hospitalization h
-         WHERE h.status <> 'CANCELLED'
+         WHERE h.case_status <> 'CANCELLED'
     """)).mappings().first()
 
     return [

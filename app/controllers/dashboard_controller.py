@@ -149,10 +149,10 @@ def _kpis(db: Session, params: dict) -> DashboardKPIs:
     "approved" KPI additionally filters approval events themselves by range."""
     row = db.execute(text("""
         WITH cases AS (
-            SELECT h.id, h.status
+            SELECT h.id, h.case_status AS status
               FROM hospitalization h
              WHERE h.hospital_id = :hospital_id
-               AND h.status <> 'CANCELLED'
+               AND h.case_status <> 'CANCELLED'
                AND h.created_at >= :since
                AND h.created_at <  :until
         ),
@@ -233,7 +233,7 @@ def _funnel(db: Session, params: dict) -> list[FunnelStep]:
              WHERE hospital_id = :hospital_id
                AND created_at >= :since
                AND created_at <  :until
-               AND status <> 'CANCELLED'
+               AND case_status <> 'CANCELLED'
         ),
         requested AS (
             -- Latest PRE_AUTH form per case, summed.
@@ -301,7 +301,7 @@ def _funnel(db: Session, params: dict) -> list[FunnelStep]:
 
 # ─── Recent activity ──────────────────────────────────────────────────
 
-def _recent_activity(db: Session, params: dict, limit: int = 15) -> list[ActivityItem]:
+def _recent_activity(db: Session, params: dict, limit: int = 5) -> list[ActivityItem]:
     rows = db.execute(text("""
         SELECT sh.id, sh.stage, sh.status, sh.approved_amount, sh.created_at, sh.remarks,
                h.id AS claim_case_id, h.uhid,
@@ -347,7 +347,7 @@ def _insurers(db: Session, params: dict) -> list[InsurerStats]:
              WHERE h.hospital_id = :hospital_id
                AND h.created_at >= :since
                AND h.created_at <  :until
-               AND h.status <> 'CANCELLED'
+               AND h.case_status <> 'CANCELLED'
         ),
         decisions AS (
             -- Each status_history row that's an approval or denial counts as
@@ -438,7 +438,7 @@ def _status_distribution(db: Session, hospital_id: UUID) -> list[StatusBucket]:
     row = db.execute(text("""
         SELECT
             COUNT(*) FILTER (
-                WHERE h.current_stage = 'PRE_AUTH' AND h.status = 'SUBMITTED'
+                WHERE h.current_stage = 'PRE_AUTH' AND h.case_status = 'SUBMITTED'
             ) AS pre_auth_submitted,
             COUNT(*) FILTER (
                 WHERE h.current_stage = 'PRE_AUTH'
@@ -446,7 +446,7 @@ def _status_distribution(db: Session, hospital_id: UUID) -> list[StatusBucket]:
                   AND NOT EXISTS (SELECT 1 FROM claims WHERE claim_case_id = h.id)
             ) AS pre_auth_approved,
             COUNT(*) FILTER (
-                WHERE h.current_stage = 'CLAIM' AND h.status = 'CLAIM_SUBMITTED'
+                WHERE h.current_stage = 'CLAIM' AND h.case_status = 'CLAIM_SUBMITTED'
             ) AS claim_submitted,
             COUNT(*) FILTER (
                 WHERE EXISTS (SELECT 1 FROM claims c WHERE c.claim_case_id = h.id
@@ -459,7 +459,7 @@ def _status_distribution(db: Session, hospital_id: UUID) -> list[StatusBucket]:
             ) AS invoice_open
           FROM hospitalization h
          WHERE h.hospital_id = :hospital_id
-           AND h.status <> 'CANCELLED'
+           AND h.case_status <> 'CANCELLED'
     """), {"hospital_id": hospital_id}).mappings().first()
 
     return [

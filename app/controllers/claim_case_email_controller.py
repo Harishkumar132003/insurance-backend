@@ -32,7 +32,7 @@ def get_uncategorized_count(db: Session, hospital_id) -> dict:
         .join(ClaimCase, ClaimCaseEmail.claim_case_id == ClaimCase.id)
         .filter(
             ClaimCase.hospital_id == hospital_id,
-            ClaimCase.status != "CANCELLED",
+            ClaimCase.case_status != "CANCELLED",
             ClaimCaseEmail.direction == "RECEIVED",
             ClaimCaseEmail.is_read.is_(False),
         )
@@ -95,7 +95,7 @@ def get_all_claim_case_emails(
             ClaimCaseEmail,
             ClaimCase.claim_number,
             ClaimCase.current_stage,
-            ClaimCase.status.label("case_status"),
+            ClaimCase.case_status.label("case_status"),
             PolicyProviderConfig.is_onboarded,
             PolicyProviderConfig.name.label("provider_name"),
         )
@@ -457,8 +457,8 @@ def validate_email_suggestion(
             if applied_status in ("APPROVED", "PARTIALLY_APPROVED", "DENIED"):
                 claim_row.processed_at = datetime.now(timezone.utc)
 
-            claim_case.status = CLAIM_OUTCOME_TO_CASE_STATUS[applied_status]
-            # Do NOT touch claim_case.claim_status or claim_case.approved_amount
+            claim_case.case_status = CLAIM_OUTCOME_TO_CASE_STATUS[applied_status]
+            # Do NOT touch claim_case.preauth_outcome or claim_case.approved_amount
             # — those hold the pre-auth outcome and must stay intact.
 
             if email.ai_suggested_claim_number and not claim_case.claim_number:
@@ -473,8 +473,8 @@ def validate_email_suggestion(
                 email.ai_suggested_status = applied_status
                 if applied_status in STATUS_TO_EMAIL_TYPE:
                     email.email_type = STATUS_TO_EMAIL_TYPE[applied_status]
-            claim_case.claim_status = applied_status
-            claim_case.status = applied_status
+            claim_case.preauth_outcome = applied_status
+            claim_case.case_status = applied_status
 
             if email.ai_suggested_claim_number and not claim_case.claim_number:
                 claim_case.claim_number = email.ai_suggested_claim_number
@@ -545,7 +545,7 @@ def get_provider_queue(
 
     base_query = db.query(ClaimCase).filter(
         ClaimCase.policy_provider_id == policy_provider_id,
-        ClaimCase.status.in_(list(AWAITING_PROVIDER_STATUSES)),
+        ClaimCase.case_status.in_(list(AWAITING_PROVIDER_STATUSES)),
     )
     total = base_query.count()
     total_pages = math.ceil(total / page_size) if total > 0 else 1
@@ -589,7 +589,7 @@ def get_provider_queue(
             "hospital_id": cc.hospital_id,
             "hospital_name": hospitals.get(cc.hospital_id),
             "amount": float(amount) if amount is not None else None,
-            "status": cc.status,
+            "status": cc.case_status,
             "created_at": cc.created_at,
         })
 
@@ -652,10 +652,10 @@ def process_by_provider(
             detail="Not allowed to act on this claim case",
         )
 
-    if claim_case.status not in AWAITING_PROVIDER_STATUSES:
+    if claim_case.case_status not in AWAITING_PROVIDER_STATUSES:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Claim case is not awaiting provider action (status={claim_case.status})",
+            detail=f"Claim case is not awaiting provider action (status={claim_case.case_status})",
         )
 
     provider = (
@@ -673,7 +673,7 @@ def process_by_provider(
     if is_claim_stage:
         # Claim outcomes don't follow the pre-auth "second approval becomes
         # enhancement" rule — they're judged on the claim alone. The pre-auth
-        # outcome on the row (`claim_case.claim_status` / `approved_amount`)
+        # outcome on the row (`claim_case.preauth_outcome` / `approved_amount`)
         # is preserved as-is.
         if new_status not in CLAIM_OUTCOME_TO_CASE_STATUS:
             raise HTTPException(
@@ -691,7 +691,7 @@ def process_by_provider(
             claim.approved_amount = float(approved_amount)
         if new_status in ("APPROVED", "PARTIALLY_APPROVED", "DENIED"):
             claim.processed_at = datetime.now(timezone.utc)
-        claim_case.status = CLAIM_OUTCOME_TO_CASE_STATUS[new_status]
+        claim_case.case_status = CLAIM_OUTCOME_TO_CASE_STATUS[new_status]
         if claim_number and not claim_case.claim_number:
             claim_case.claim_number = claim_number
         round_amount = float(approved_amount) if approved_amount is not None and new_status in ("APPROVED", "PARTIALLY_APPROVED") else None
@@ -699,8 +699,8 @@ def process_by_provider(
         # Pre-auth path (existing behavior).
         new_status = coerce_outcome_for_prior_approval(new_status, claim_case.approved_amount)
 
-        claim_case.claim_status = new_status
-        claim_case.status = new_status
+        claim_case.preauth_outcome = new_status
+        claim_case.case_status = new_status
 
         if claim_number and not claim_case.claim_number:
             claim_case.claim_number = claim_number

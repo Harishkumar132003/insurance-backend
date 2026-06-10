@@ -130,7 +130,7 @@ def create_invoice(
         )
     _scope_to_hospital(claim_case, current_user)
 
-    if claim_case.status == "CANCELLED":
+    if claim_case.case_status == "CANCELLED":
         raise HTTPException(
             status_code=http_status.HTTP_400_BAD_REQUEST,
             detail="Case is cancelled — invoice cannot be raised",
@@ -340,7 +340,7 @@ def list_for_hospital(
         .join(Claim, Claim.claim_case_id == ClaimCase.id)
         .outerjoin(Invoice, Invoice.claim_case_id == ClaimCase.id)
         .filter(ClaimCase.hospital_id == current_user.hospital_id)
-        .filter(ClaimCase.status != "CANCELLED")
+        .filter(ClaimCase.case_status != "CANCELLED")
         .filter(Claim.approved_amount.isnot(None))
         .filter(Claim.approved_amount > 0)
     )

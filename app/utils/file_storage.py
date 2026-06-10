@@ -51,6 +51,22 @@ def save_mou(hospital_id, file_bytes: bytes, original_filename: str) -> tuple[st
     return stored_filename, file_path
 
 
+def save_settlement_file(hospital_id, file_bytes: bytes, original_filename: str) -> tuple[str, str]:
+    """Save a settlement remittance file (not claim-scoped). Returns
+    (stored_filename, file_path)."""
+    dir_path = os.path.join(UPLOAD_BASE_DIR, "settlements", str(hospital_id))
+    os.makedirs(dir_path, exist_ok=True)
+
+    ext = os.path.splitext(original_filename)[1]
+    stored_filename = f"{uuid.uuid4().hex[:12]}{ext}"
+    file_path = os.path.join(dir_path, stored_filename)
+
+    with open(file_path, "wb") as f:
+        f.write(file_bytes)
+
+    return stored_filename, file_path
+
+
 def delete_file(file_path: str) -> None:
     """Delete a file from disk."""
     full_path = os.path.abspath(file_path)
