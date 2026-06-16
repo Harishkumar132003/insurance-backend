@@ -6,6 +6,7 @@ from uuid import UUID
 from fastapi import HTTPException, status
 from sqlalchemy.orm import Session
 
+from app.db.session import SessionLocal
 from app.models.ai_chat import AiChat
 from app.models.ai_chat_message import AiChatMessage
 from app.models.user import User
@@ -143,7 +144,7 @@ async def send_message(db: Session, user: User, chat_id: UUID, question: str) ->
 def prepare_message(db: Session, user: User, chat_id: UUID, question: str):
     """Validate access and persist the user's message before streaming begins.
     Raising here yields a clean HTTP error (404/400), not a mid-stream failure.
-    Returns (hospital_id, chat, history)."""
+    Returns (hospital_id, history)."""
     hospital_id = _require_hospital(user)
     chat = _get_owned(db, user, chat_id)
 
@@ -154,31 +155,40 @@ def prepare_message(db: Session, user: User, chat_id: UUID, question: str):
     if chat.title == "New chat":
         chat.title = (question.strip()[:60] + ("…" if len(question.strip()) > 60 else "")) or "New chat"
     db.commit()
-    return hospital_id, chat, history
+    return hospital_id, history
 
 
-async def stream_message(db: Session, chat, hospital_id, question: str, history: list[dict]):
+async def stream_message(chat_id: UUID, hospital_id, question: str, history: list[dict]):
     """SSE generator: stream the agent's progress, persist the assistant message
-    when the final `done` event arrives, and enrich it with the saved row id."""
+    when the final `done` event arrives, and enrich it with the saved row id.
+
+    Uses its OWN short-lived session (opened only at persist time): the request's
+    `Depends(get_db)` session is closed before this generator finishes streaming,
+    so the request-scoped objects are detached by the time `done` arrives.
+    """
     try:
         async for ev in ai_query_service.astream_answer(str(hospital_id), question, history):
             if ev["event"] == "done":
                 d = ev["data"]
-                assistant = AiChatMessage(
-                    role="assistant",
-                    content=d.get("answer", ""),
-                    sql=d.get("sql", []),
-                    columns=d.get("columns", []),
-                    rows=d.get("rows", []),
-                )
-                chat.messages.append(assistant)
-                db.commit()
-                db.refresh(assistant)
-                d["id"] = assistant.id
-                d["created_at"] = assistant.created_at.isoformat() if assistant.created_at else None
+                db = SessionLocal()
+                try:
+                    assistant = AiChatMessage(
+                        chat_id=chat_id,           # insert by FK; no relationship/lazy-load
+                        role="assistant",
+                        content=d.get("answer", ""),
+                        sql=d.get("sql", []),
+                        columns=d.get("columns", []),
+                        rows=d.get("rows", []),
+                    )
+                    db.add(assistant)
+                    db.commit()
+                    db.refresh(assistant)
+                    d["id"] = assistant.id
+                    d["created_at"] = assistant.created_at.isoformat() if assistant.created_at else None
+                finally:
+                    db.close()
             yield ev
     except Exception:  # noqa: BLE001 — surface as an SSE error, not a 500
         logger.exception("AI chat stream failed")
-        db.rollback()
         yield {"event": "error",
                "data": {"detail": "The assistant couldn't answer that. Please try again."}}
