@@ -112,11 +112,11 @@ async def send_message_stream(
     """Same as send_message, but streamed over SSE so long agent runs don't time
     out. The user message is persisted up front; the assistant message is saved
     when the final `done` event fires (which also carries the saved row id)."""
-    hospital_id, chat, history = ai_chat_controller.prepare_message(
+    hospital_id, history = ai_chat_controller.prepare_message(
         db, current_user, chat_id, payload.question,
     )
     return _sse(ai_chat_controller.stream_message(
-        db, chat, hospital_id, payload.question, history,
+        chat_id, hospital_id, payload.question, history,
     ))
 
 
