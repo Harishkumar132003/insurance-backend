@@ -78,7 +78,7 @@ def create_claim_and_form_data(
         uhid=payload.uhid,
         policy_provider_id=payload.policy_provider_id,
         hospital_id=hospital_id,
-        status="DRAFT",
+        case_status="DRAFT",   # renamed from `status` (see ClaimCase model)
     )
     db.add(claim_case)
     db.flush()

@@ -216,6 +216,8 @@ class ClaimListItem(BaseModel):
     # Invoice (post-claim-approval) status: INVOICE_RAISED | PAID | UNPAID.
     # Null when no invoice has been raised yet for this case.
     invoice_status: str | None = None
+    # Total settled amount for this case from uploaded settlement advices.
+    settled_amount: float | None = None
     status: str | None = None
     workflow_status: str | None = None
     # True when this case's workflow status is one of the AWAITING_PROVIDER
