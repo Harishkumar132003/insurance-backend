@@ -36,7 +36,7 @@ router = APIRouter(prefix="/claim-cases", tags=["Claim Cases"])
 def get_all_claims(
     exclude_draft: bool = Query(default=False, description="Exclude claims with DRAFT status"),
     provider_id: UUID | None = Query(default=None, description="Filter by policy provider ID"),
-    q: str | None = Query(default=None, description="Search by UHID or patient name (case-insensitive substring match)"),
+    q: str | None = Query(default=None, description="Search by UHID, claim number, or patient name (case-insensitive substring match)"),
     stage: str | None = Query(default=None, description="Filter by current_stage: PRE_AUTH or CLAIM"),
     approved_only: bool = Query(default=False, description="Only cases with approved_amount > 0"),
     db: Session = Depends(get_db),

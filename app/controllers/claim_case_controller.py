@@ -15,6 +15,7 @@ from app.models.query_log import QueryLog
 from app.models.status_history import StatusHistory
 from app.models.pre_auth_patient import PreAuthPatient
 from app.models.invoice import Invoice
+from app.models.settlement_item import SettlementItem
 from app.utils.pre_auth_sections import compose_sections
 
 
@@ -62,7 +63,11 @@ def get_all_claims(
             .where(PreAuthPatient.patient_name.ilike(needle))
         )
         query = query.filter(
-            sa.or_(ClaimCase.uhid.ilike(needle), patient_name_match)
+            sa.or_(
+                ClaimCase.uhid.ilike(needle),
+                ClaimCase.claim_number.ilike(needle),
+                patient_name_match,
+            )
         )
 
     claim_cases = query.order_by(ClaimCase.created_at.desc()).all()
@@ -122,6 +127,16 @@ def get_all_claims(
         )
         invoice_status = invoice_row.status if invoice_row else None
 
+        # Settled amount for this case — sum of settlement line items mapped to
+        # it (via claim_number) from uploaded remittance advices. Drives the
+        # "Settled" figure on the Claim Tracker card.
+        settled_total = (
+            db.query(sa.func.coalesce(sa.func.sum(SettlementItem.settled_amount), 0))
+            .filter(SettlementItem.claim_case_id == cc.id)
+            .scalar()
+        )
+        settled_amount = float(settled_total) if settled_total else None
+
         # Get provider details
         provider_name = None
         provider_id_str = None
@@ -155,6 +170,7 @@ def get_all_claims(
             "claim_raised_amount": claim_raised_amount,
             "claim_approved_amount": claim_approved_amount,
             "invoice_status": invoice_status,
+            "settled_amount": settled_amount,
             "status": cc.preauth_outcome or cc.case_status,
             "workflow_status": cc.case_status,
             "awaiting_provider_action": cc.case_status in AWAITING_PROVIDER_STATUSES,
