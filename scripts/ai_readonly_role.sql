@@ -66,7 +66,8 @@ DECLARE
     'hospitals','users','hospitalization','cc_emails','execution_logs',
     'hospital_configs','hospital_prompts','hospital_provider_mappings',
     'pre_auth','pre_auth_patient','pre_auth_stay','pre_auth_treatment',
-    'claims','settlements','invoice','invoice_payment','status_history',
+    'claims','settlements','settlement_batch','settlement_item',
+    'invoice','invoice_payment','status_history',
     'query_logs','claim_case_emails','claim_case_email_attachments',
     'claim_case_documents','part_d_letters','claim_bill_item',
     -- shared reference data (no RLS — non-sensitive, needed for labels/joins)
@@ -104,7 +105,8 @@ DECLARE
   -- Tier 0: direct hospital_id
   direct text[] := ARRAY[
     'hospitalization','users','cc_emails','execution_logs',
-    'hospital_configs','hospital_prompts','hospital_provider_mappings'
+    'hospital_configs','hospital_prompts','hospital_provider_mappings',
+    'settlement_batch'
   ];
   -- Tier 1: claim_case_id -> hospitalization.hospital_id
   via_case text[] := ARRAY[
@@ -161,6 +163,15 @@ BEGIN
            USING (invoice_id IN (SELECT i.id FROM public.invoice i
                                  JOIN public.hospitalization h ON h.id = i.claim_case_id
                                  WHERE h.hospital_id = public.oasys_current_hospital()))';
+
+  -- settlement_item -> batch_id -> settlement_batch.hospital_id
+  -- (scope via the batch's hospital_id so unmatched items — claim_case_id NULL —
+  --  are still tenant-scoped, not hidden)
+  EXECUTE 'ALTER TABLE public.settlement_item ENABLE ROW LEVEL SECURITY';
+  EXECUTE 'DROP POLICY IF EXISTS ai_ro_tenant ON public.settlement_item';
+  EXECUTE 'CREATE POLICY ai_ro_tenant ON public.settlement_item FOR SELECT TO oasys_ai_ro
+           USING (batch_id IN (SELECT b.id FROM public.settlement_batch b
+                               WHERE b.hospital_id = public.oasys_current_hospital()))';
 END $$;
 
 -- ---------------------------------------------------------------------
