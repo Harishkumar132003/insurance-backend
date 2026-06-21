@@ -16,7 +16,15 @@ class FormData(Base):
     id = Column(BigInteger, primary_key=True, autoincrement=True)
     claim_case_id = Column(UUID(as_uuid=True), ForeignKey("hospitalization.id"), nullable=True)
     stage = Column(String, nullable=False, default="PRE_AUTH", server_default="PRE_AUTH")
-    status = Column(String, nullable=False, default="DRAFT")
+    # Form lifecycle of THIS pre_auth row: 'DRAFT' | 'SUBMITTED'. Renamed from
+    # `status` (which was confused with the case workflow status); the case
+    # workflow/outcome lives on hospitalization.case_status / preauth_outcome.
+    draft_state = Column(String, nullable=False, default="DRAFT")
+    # The case's pre-auth workflow status, mirrored onto this PRE_AUTH row from
+    # hospitalization.case_status while current_stage='PRE_AUTH', then FROZEN once
+    # the claim is raised. Kept in sync by a DB trigger (trg_sync_preauth_status),
+    # not app code. Read-only from the app's perspective.
+    preauth_status = Column(String, nullable=False, default="DRAFT", server_default="DRAFT")
     # Claim-stage only (NULL for pre-auth rows).
     claimed_amount = Column(Numeric(12, 2), nullable=True)
     remarks = Column(Text, nullable=True)

@@ -28,21 +28,16 @@ from sqlalchemy import text
 from app.core.config import settings
 from app.db.readonly_session import readonly_connection
 from app.schemas.ai_query import QueryPlan
-from app.services import sql_guard
+from app.services import ai_table_catalog, sql_guard
 
 logger = logging.getLogger(__name__)
 
 # The agent may inspect/query only these tables (the read-only role is granted
 # nothing else). `patients` is deliberately absent — it has no tenant column.
 ALLOWED_TABLES = [
-    "hospitals", "users", "hospitalization", "cc_emails", "execution_logs",
-    "hospital_configs", "hospital_prompts", "hospital_provider_mappings",
+    "hospitals", "hospitalization","hospital_provider_mappings",
     "pre_auth", "pre_auth_patient", "pre_auth_stay", "pre_auth_treatment",
-    "claims", "settlements", "settlement_batch", "settlement_item", "status_history",
-    "query_logs", "claim_case_emails", "claim_case_email_attachments",
-    "claim_case_documents", "part_d_letters", "claim_bill_item",
-    "policy_provider_configs", "form_templates", "email_templates",
-    "summary_prompt_templates", "features",
+    "claims", "settlements", "settlement_batch", "settlement_item", "status_history", "claim_case_emails", "claim_bill_item",
 ]
 _ALLOWED_SET = set(ALLOWED_TABLES)
 
@@ -141,8 +136,14 @@ QUERY RULES — avoid these common mistakes:
   current_stage for outcomes or workflow states. Workflow states live in
   case_status. "Awaiting insurer" = case_status IN (SUBMITTED, ENHANCE_SUBMITTED,
   RECONSIDER, ADR_SUBMITTED, CLAIM_SUBMITTED, CLAIM_ADR_SUBMITTED, CLAIM_RECONSIDER).
-- pre_auth.status is the FORM state (DRAFT/SUBMITTED) — NEVER use it for pre-auth
-  outcomes. Outcomes (APPROVED/DENIED/PARTIALLY_APPROVED/ENHANCEMENT_*) are ALWAYS
+- pre_auth.draft_state is the FORM state (DRAFT/SUBMITTED only) — NEVER use it for
+  pre-auth outcomes or workflow status.
+- pre_auth.preauth_status is the case's PRE-AUTH WORKFLOW status mirrored onto the
+  PRE_AUTH row (DRAFT, SUBMITTED, ENHANCE_SUBMITTED, APPROVED, PARTIALLY_APPROVED,
+  DENIED, ENHANCEMENT_APPROVED/DENIED, CANCELLED, ...), FROZEN once the claim is
+  raised. Use it for "what is the pre-auth status" questions.
+- For the LIVE overall case status (pre-auth OR claim phase) use
+  hospitalization.case_status; for the final pre-auth DECISION use
   hospitalization.preauth_outcome.
 - "Pre-auth requests / pre-auths raised" = pre_auth rows WHERE stage='PRE_AUTH'
   (the table also holds CLAIM-stage rows). Always add stage='PRE_AUTH' when
@@ -150,9 +151,18 @@ QUERY RULES — avoid these common mistakes:
 - RANKING by a nullable amount (highest/top/max approved_amount etc.): exclude
   NULLs — add "WHERE <col> IS NOT NULL" (or "ORDER BY <col> DESC NULLS LAST"),
   else NULLs sort first and you return an empty/null top row.
-- PATIENT NAME lives ONLY in pre_auth_patient.patient_name. Join patients via
-  pre_auth_patient.form_data_id -> pre_auth.id (stage='PRE_AUTH') -> hospitalization.id.
-  NEVER join uhid = patient_name (uhid is an ID, not a name).
+- PATIENT NAME lives ONLY in pre_auth_patient.patient_name. The join
+  `pre_auth p ON p.claim_case_id = h.id AND p.stage='PRE_AUTH'` is EXACTLY ONE
+  pre_auth row per case, so a plain JOIN does NOT fan out — use it directly. Do
+  NOT pick the row with a "(SELECT id FROM pre_auth WHERE claim_case_id=h.id
+  LIMIT 1)" subquery (arbitrary row, mismatches patient↔claim), and NEVER join
+  uhid = patient_name. Canonical "top patient by <amount>" query:
+    SELECT pp.patient_name, SUM(c.claimed_amount) AS total
+    FROM claims c
+    JOIN hospitalization h ON h.id = c.claim_case_id
+    JOIN pre_auth p ON p.claim_case_id = h.id AND p.stage = 'PRE_AUTH'
+    JOIN pre_auth_patient pp ON pp.form_data_id = p.id
+    GROUP BY pp.patient_name ORDER BY total DESC LIMIT 1;
 
 TIME RANGES: "this month" -> created_at >= date_trunc('month', CURRENT_DATE);
 "last month", "this year", "today" etc. follow the same date_trunc pattern on
@@ -317,6 +327,12 @@ SYSTEM_PROMPT = f"""You are a data assistant for a hospital administrator using 
 Given a question, you create syntactically correct PostgreSQL SELECT queries,
 run them, and answer in clear, human-readable language.
 
+The TABLE cubes at the end of this prompt are AUTHORITATIVE for the tables listed:
+use their exact column names, the FK paths shown for joins, and the [enum: ...]
+values for any status/category filter — never invent a column or a status value.
+The cubes cover the tables the planner selected; for any other table, call
+get_schema first.
+
 Workflow:
 1. Understand what the user is really asking. Map their words to the right
    metric/column using the MONEY METRICS guide below BEFORE writing SQL. A money
@@ -380,8 +396,21 @@ Decide, using the MONEY METRICS and table guide below:
 - The time range, if any, as a SQL expression on a date column
   (e.g. "this month" -> created_at >= date_trunc('month', CURRENT_DATE)).
 - Any named filters (patient, provider, status) as entities.
-- Which tables to read and the FK joins needed.
+- Which tables to read — include EVERY table in the join chain (the bridge tables
+  too, not just the "main" one), with the exact FK joins from TABLE/JOIN PATHS
+  below. Never select the deprecated `settlements` table.
 - The ordered steps the executor should take (get_schema, then run_query, ...).
+
+TABLE/JOIN PATHS — use these exact FK joins; do not invent others, and put ALL
+tables in the chain into `tables`:
+- patient info -> pre_auth_patient.form_data_id = pre_auth.id (stage='PRE_AUTH'),
+  then pre_auth.claim_case_id = hospitalization.id.
+- pre_auth / claims / status_history / claim_case_emails ->
+  <table>.claim_case_id = hospitalization.id.
+- pre_auth_stay / pre_auth_treatment / claim_bill_item ->
+  <table>.form_data_id = pre_auth.id  (then pre_auth -> hospitalization as above).
+- settlements -> settlement_item.batch_id = settlement_batch.id
+  (settlement_batch holds hospital_id + settlement_date).
 
 CLARIFY WHEN UNSURE: if you cannot confidently map the question to a metric,
 column, time range, or stage — or it is otherwise ambiguous — set
@@ -470,8 +499,50 @@ def _planner_system_prompt() -> str:
     return PLANNER_PROMPT + "\n\n" + _schema_catalog()
 
 
-def _executor_system_prompt() -> str:
-    return SYSTEM_PROMPT + "\n\n" + _schema_catalog()
+# Bridge tables required to join a given table back to the case hub. When the
+# planner picks only a leaf table, we add these so the executor's cubes always
+# carry the full join chain (it can't write a correct join without the bridge).
+_TABLE_DEPS = {
+    "pre_auth_patient": ["pre_auth", "hospitalization"],
+    "pre_auth_stay": ["pre_auth", "hospitalization"],
+    "pre_auth_treatment": ["pre_auth", "hospitalization"],
+    "claim_bill_item": ["pre_auth", "hospitalization"],
+    "pre_auth": ["hospitalization"],
+    "claims": ["hospitalization"],
+    "status_history": ["hospitalization"],
+    "claim_case_emails": ["hospitalization"],
+    "settlement_item": ["settlement_batch"],
+}
+
+
+def _selected_tables(plan: QueryPlan) -> list[str]:
+    """Tables the planner picked (plan.tables + any named in plan.joins),
+    expanded with the bridge tables needed to complete their joins."""
+    sel = [t for t in (plan.tables or []) if t in _ALLOWED_SET]
+    # tables named explicitly in join expressions
+    for j in (plan.joins or []):
+        for t in ALLOWED_TABLES:
+            if t in j and t not in sel:
+                sel.append(t)
+    # expand with bridge tables so every join in the chain has its cube
+    for t in list(sel):
+        for dep in _TABLE_DEPS.get(t, []):
+            if dep in _ALLOWED_SET and dep not in sel:
+                sel.append(dep)
+    return sel
+
+
+def _executor_system_prompt(selected_tables: list[str] | None = None) -> str:
+    """Executor prompt: rich semantic 'cubes' for the planner-selected tables
+    (falls back to all tables if the planner selected none), plus a bare list of
+    the other queryable tables so the executor can still get_schema them."""
+    tables = [t for t in (selected_tables or []) if t in _ALLOWED_SET] or list(ALLOWED_TABLES)
+    block = ai_table_catalog.render_cubes(tables)
+    others = [t for t in ALLOWED_TABLES if t not in tables]
+    if others:
+        block += ("\n\nOTHER queryable tables (call get_schema for their columns "
+                  "if you need them): " + ", ".join(others))
+    return SYSTEM_PROMPT + "\n\n" + block
 
 
 async def _plan(model, question: str, history: list[dict] | None) -> QueryPlan:
@@ -484,7 +555,13 @@ async def _plan(model, question: str, history: list[dict] | None) -> QueryPlan:
         if m.get("role") in ("user", "assistant") and m.get("content")
     ]
     messages.append({"role": "user", "content": question})
-    return await planner.ainvoke(messages)
+    plan = await planner.ainvoke(messages)
+    # TESTING: log the planner's selected tables for each query.
+    logger.info(
+        "AI table selection | tables=%s | joins=%s | intent=%s | clarify=%s | q=%r",
+        plan.tables, plan.joins, plan.intent, plan.needs_clarification, question,
+    )
+    return plan
 
 
 def _extract_text(content) -> str:
@@ -570,9 +647,10 @@ async def astream_answer(hospital_id: str, question: str,
 
     yield {"event": "plan", "data": plan.model_dump()}
 
-    # Step 2 — EXECUTE, streaming one heartbeat per agent step.
+    # Step 2 — EXECUTE, streaming one heartbeat per agent step. The executor gets
+    # rich semantic cubes for ONLY the planner-selected tables.
     agent = create_agent(model, _build_tools(hospital_id, trace),
-                         system_prompt=_executor_system_prompt())
+                         system_prompt=_executor_system_prompt(_selected_tables(plan)))
     yield {"event": "status", "data": {"stage": "executing"}}
 
     answer = ""
@@ -650,11 +728,11 @@ async def answer_question(hospital_id: str, question: str,
             "plan": plan.model_dump(),
         }
 
-    # Step 2 — EXECUTE. Run the SQL agent, handing it the approved plan.
+    # Step 2 — EXECUTE. Run the SQL agent with rich cubes for the selected tables.
     agent = create_agent(
         model,
         _build_tools(hospital_id, trace),
-        system_prompt=_executor_system_prompt(),
+        system_prompt=_executor_system_prompt(_selected_tables(plan)),
     )
 
     result = await agent.ainvoke(

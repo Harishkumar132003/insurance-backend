@@ -156,12 +156,12 @@ def raise_claim(
     draft_form = _find_claim_draft(db, claim_case.id)
     if draft_form is not None:
         claim_form = draft_form
-        claim_form.status = "SUBMITTED"
+        claim_form.draft_state = "SUBMITTED"
     else:
         claim_form = FormData(
             claim_case_id=claim_case.id,
             stage="CLAIM",
-            status="SUBMITTED",
+            draft_state="SUBMITTED",
         )
         db.add(claim_form)
     claim_form.stage = "CLAIM"
@@ -355,7 +355,7 @@ def _find_claim_draft(db: Session, claim_case_id) -> FormData | None:
         db.query(FormData)
         .filter(
             FormData.claim_case_id == claim_case_id,
-            FormData.status == "DRAFT",
+            FormData.draft_state == "DRAFT",
             FormData.stage == "CLAIM",
         )
         .order_by(FormData.created_at.desc())
@@ -407,7 +407,7 @@ def save_claim_draft(
         draft = FormData(
             claim_case_id=claim_case.id,
             stage="CLAIM",
-            status="DRAFT",
+            draft_state="DRAFT",
         )
         db.add(draft)
     draft.stage = "CLAIM"

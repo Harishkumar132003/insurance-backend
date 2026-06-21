@@ -16,7 +16,7 @@ def create_form_data(db: Session, payload: FormDataCreate) -> FormData:
     form_data = FormData(
         claim_case_id=payload.claim_case_id,
         stage="PRE_AUTH",
-        status="DRAFT",
+        draft_state="DRAFT",
     )
     db.add(form_data)
     db.flush()
@@ -34,7 +34,7 @@ def update_form_data(db: Session, form_data_id: int, payload: FormDataUpdate) ->
             detail="Form data not found",
         )
 
-    if form_data.status == "SUBMITTED":
+    if form_data.draft_state == "SUBMITTED":
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Cannot edit a submitted form",
@@ -55,13 +55,13 @@ def submit_form_data(db: Session, form_data_id: int) -> FormData:
             detail="Form data not found",
         )
 
-    if form_data.status == "SUBMITTED":
+    if form_data.draft_state == "SUBMITTED":
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Form already submitted",
         )
 
-    form_data.status = "SUBMITTED"
+    form_data.draft_state = "SUBMITTED"
     db.commit()
     db.refresh(form_data)
     return form_data
@@ -87,7 +87,7 @@ def create_claim_and_form_data(
     form_data = FormData(
         claim_case_id=claim_case.id,
         stage="PRE_AUTH",
-        status="DRAFT",
+        draft_state="DRAFT",
     )
     db.add(form_data)
     db.flush()
