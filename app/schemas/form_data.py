@@ -17,7 +17,7 @@ class FormDataUpdate(BaseModel):
 
 class FormDataResponse(BaseModel):
     id: int
-    status: str
+    draft_state: str
 
     model_config = {"from_attributes": True}
 
@@ -26,7 +26,7 @@ class FormDataDetailResponse(BaseModel):
     id: int
     claim_case_id: UUID | None = None
     sections: dict[str, Any] = {}
-    status: str
+    draft_state: str
     created_at: datetime
     updated_at: datetime | None = None
 
