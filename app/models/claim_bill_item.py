@@ -14,6 +14,10 @@ class ClaimBillItem(Base):
     form_data_id = Column(BigInteger, ForeignKey("pre_auth.id", ondelete="CASCADE"), nullable=False)
     label = Column(String, nullable=False)
     amount = Column(Numeric(12, 2), nullable=False)
+    # Per-day lines (e.g. Non ICU Room / ICU Charges): amount == rate * days.
+    # NULL for flat lines — a line is "per day" when rate is not NULL.
+    rate = Column(Numeric(12, 2), nullable=True)
+    days = Column(Integer, nullable=True)
     sort_order = Column(Integer, nullable=False, default=0)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 

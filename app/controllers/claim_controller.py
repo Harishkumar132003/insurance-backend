@@ -71,7 +71,12 @@ def _build_response(
     if form is not None:
         for item in form.bill_items:
             bill_breakdown.append(
-                BillBreakdownItem(label=item.label, amount=Decimal(str(item.amount)))
+                BillBreakdownItem(
+                    label=item.label,
+                    amount=Decimal(str(item.amount)),
+                    rate=Decimal(str(item.rate)) if item.rate is not None else None,
+                    days=item.days,
+                )
             )
         remarks = form.remarks
 
@@ -346,6 +351,8 @@ def _replace_bill_items(db: Session, form_data: FormData, items) -> None:
             form_data_id=form_data.id,
             label=it.label,
             amount=it.amount,
+            rate=getattr(it, "rate", None),
+            days=getattr(it, "days", None),
             sort_order=idx,
         ))
 
@@ -367,7 +374,12 @@ def _draft_to_response(draft: FormData | None) -> ClaimDraftResponse:
     if draft is None:
         return ClaimDraftResponse(is_persisted=False)
     items = [
-        BillBreakdownItem(label=it.label, amount=Decimal(str(it.amount)))
+        BillBreakdownItem(
+            label=it.label,
+            amount=Decimal(str(it.amount)),
+            rate=Decimal(str(it.rate)) if it.rate is not None else None,
+            days=it.days,
+        )
         for it in draft.bill_items
     ]
     claimed = Decimal(str(draft.claimed_amount)) if draft.claimed_amount is not None else None

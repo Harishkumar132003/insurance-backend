@@ -10,6 +10,9 @@ from app.schemas.claim_case_document import ClaimCaseDocumentResponse
 class BillBreakdownItem(BaseModel):
     label: str
     amount: Decimal
+    # Per-day lines carry the rate + day count; flat lines leave these None.
+    rate: Decimal | None = None
+    days: int | None = None
 
 
 class ClaimCreate(BaseModel):

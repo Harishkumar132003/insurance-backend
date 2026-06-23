@@ -172,6 +172,13 @@ def apply_sections(db: Session, form_data: FormData, sections: dict) -> None:
             for f in _HOSP_COSTS:
                 if f in costs:
                     setattr(row, f, _num(costs.get(f)))
+        # Derived room costs: room_rent and icu_charges are per-day rates;
+        # room_rent applies to non-ICU days, icu_charges to ICU days. Computed from
+        # the row (post-setattr) so it stays consistent on partial edits too.
+        icu_days = row.icu_days or 0
+        non_icu_days = max(0, (row.expected_days or 0) - icu_days)
+        row.room_rent_total = float(row.room_rent or 0) * non_icu_days
+        row.icu_charges_total = float(row.icu_charges or 0) * icu_days
         chronic = h.get("chronic_conditions")
         if isinstance(chronic, dict):
             for col, key in _HOSP_CHRONIC.items():
@@ -267,6 +274,9 @@ def compose_sections(form_data: FormData) -> dict:
                 "package_charges": _num(h.package_charges),
                 "other_expenses": _num(h.other_expenses),
                 "total_cost": _num(h.total_cost),
+                # Derived (server-computed); read-only — not in _HOSP_COSTS.
+                "room_rent_total": _num(h.room_rent_total),
+                "icu_charges_total": _num(h.icu_charges_total),
             },
             "chronic_conditions": {
                 "diabetes": h.cc_diabetes,

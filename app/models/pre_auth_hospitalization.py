@@ -33,6 +33,11 @@ class PreAuthHospitalization(Base):
     package_charges = Column(Numeric(12, 2), nullable=True)
     other_expenses = Column(Numeric(12, 2), nullable=True)
     total_cost = Column(Numeric(12, 2), nullable=True)
+    # Room costs derived server-side on save (per-day rate * days):
+    #   room_rent_total   = room_rent   (per day) * non-ICU days (expected - icu)
+    #   icu_charges_total = icu_charges (per day) * ICU days
+    room_rent_total = Column(Numeric(12, 2), nullable=True)
+    icu_charges_total = Column(Numeric(12, 2), nullable=True)
 
     # chronic_conditions.*
     cc_diabetes = Column(Boolean, nullable=True)
