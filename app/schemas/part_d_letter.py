@@ -27,6 +27,25 @@ class PartDLetterFields(BaseModel):
     amount_to_be_paid_by_insured: str | None = None
     remarks: str | None = None
 
+    # ── Numeric bill breakdown (matches the pre-auth cost estimates) ──
+    bd_room_rent: float | None = None        # per day
+    bd_icu_charges: float | None = None      # per day
+    bd_expected_days: int | None = None
+    bd_icu_days: int | None = None
+    bd_investigation_cost: float | None = None
+    bd_ot_charges: float | None = None
+    bd_professional_fees: float | None = None
+    bd_medicines_cost: float | None = None
+    bd_package_charges: float | None = None
+    bd_other_expenses: float | None = None
+    # ── Numeric authorisation summary (computed in the modal) ──
+    as_total_bill_amount: float | None = None
+    as_discount: float | None = None
+    as_co_pay: float | None = None
+    as_deductibles: float | None = None
+    as_deductions: float | None = None
+    as_amount_to_be_paid_by_insured: float | None = None
+
 
 # The field names a PUT may carry — used to apply partial updates without
 # touching columns the caller didn't send.

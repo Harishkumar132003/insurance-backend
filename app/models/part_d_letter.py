@@ -46,6 +46,30 @@ class PartDLetter(Base):
     total_authorised_amount = Column(String, nullable=True)
     amount_to_be_paid_by_insured = Column(String, nullable=True)
 
+    # ── Numeric bill breakdown matching the pre-auth cost estimates ──
+    # Prefilled from the pre-auth costs; bd_room_rent / bd_icu_charges are
+    # per-day rates (multiplied by the day counts below). The legacy free-text
+    # columns above are kept for backward compatibility but no longer written.
+    bd_room_rent = Column(Numeric(12, 2), nullable=True)        # per day
+    bd_icu_charges = Column(Numeric(12, 2), nullable=True)      # per day
+    bd_expected_days = Column(BigInteger, nullable=True)
+    bd_icu_days = Column(BigInteger, nullable=True)
+    bd_investigation_cost = Column(Numeric(12, 2), nullable=True)
+    bd_ot_charges = Column(Numeric(12, 2), nullable=True)
+    bd_professional_fees = Column(Numeric(12, 2), nullable=True)
+    bd_medicines_cost = Column(Numeric(12, 2), nullable=True)
+    bd_package_charges = Column(Numeric(12, 2), nullable=True)
+    bd_other_expenses = Column(Numeric(12, 2), nullable=True)
+
+    # ── Numeric authorisation summary (computed in the modal, stored here) ──
+    # total_authorised == approved_amount (the canonical figure).
+    as_total_bill_amount = Column(Numeric(12, 2), nullable=True)
+    as_discount = Column(Numeric(12, 2), nullable=True)
+    as_co_pay = Column(Numeric(12, 2), nullable=True)
+    as_deductibles = Column(Numeric(12, 2), nullable=True)
+    as_deductions = Column(Numeric(12, 2), nullable=True)
+    as_amount_to_be_paid_by_insured = Column(Numeric(12, 2), nullable=True)
+
     remarks = Column(Text, nullable=True)
 
     created_at = Column(DateTime(timezone=True), server_default=func.now())
