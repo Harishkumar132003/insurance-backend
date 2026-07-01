@@ -1,17 +1,21 @@
 from sqlalchemy import Column, BigInteger, String, Numeric, Integer, DateTime, ForeignKey, Index, func
-from sqlalchemy.orm import relationship
+from sqlalchemy.dialects.postgresql import UUID
 
 from app.db.base import Base
 
 
 class ClaimBillItem(Base):
-    """A single bill-breakdown line on a claim-stage pre_auth row. Replaces the
-    `data_json.bill_breakdown` array. Anchored on the pre_auth (form) row so it
-    works for claim drafts too (which have no `claims` row yet)."""
+    """A single claim bill-breakdown line, anchored on the CASE (hospitalization).
+
+    One claim per case, so all bill lines for a case's claim (draft or raised)
+    live here keyed by hospitalization_id — no claim-stage pre_auth row needed.
+    """
     __tablename__ = "claim_bill_item"
 
     id = Column(BigInteger, primary_key=True, autoincrement=True)
-    form_data_id = Column(BigInteger, ForeignKey("pre_auth.id", ondelete="CASCADE"), nullable=False)
+    hospitalization_id = Column(
+        UUID(as_uuid=True), ForeignKey("hospitalization.id", ondelete="CASCADE"), nullable=False
+    )
     label = Column(String, nullable=False)
     amount = Column(Numeric(12, 2), nullable=False)
     # Per-day lines (e.g. Non ICU Room / ICU Charges): amount == rate * days.
@@ -21,8 +25,6 @@ class ClaimBillItem(Base):
     sort_order = Column(Integer, nullable=False, default=0)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
-    form_data = relationship("FormData", back_populates="bill_items")
-
     __table_args__ = (
-        Index("ix_claim_bill_item_form_data_id", "form_data_id"),
+        Index("ix_claim_bill_item_hospitalization_id", "hospitalization_id"),
     )

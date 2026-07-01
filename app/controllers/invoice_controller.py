@@ -50,7 +50,6 @@ def _patient_name(db: Session, claim_case_id) -> str | None:
         db.query(PreAuthPatient.patient_name)
         .join(FormData, FormData.id == PreAuthPatient.form_data_id)
         .filter(FormData.claim_case_id == claim_case_id)
-        .filter(FormData.stage != "CLAIM")
         .order_by(FormData.created_at.desc())
         .first()
     )

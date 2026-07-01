@@ -1,5 +1,5 @@
 """Mapping between the nested pre-auth form sections (API shape) and the flat
-typed columns (pre_auth_patient / pre_auth_treatment / pre_auth_hospitalization).
+typed columns (patient_personal_detail / pre_auth_treatment / pre_auth_hospitalization).
 
 The API carries the same nested section shape the frontend already builds
 (`patient_insured`, `treating_doctor`, `hospitalization`), but storage is fully
@@ -123,6 +123,10 @@ def apply_sections(db: Session, form_data: FormData, sections: dict) -> None:
             elif f in _PATIENT_BOOL_FIELDS:
                 val = _to_bool(val)
             setattr(row, f, val)
+        # Denormalise the case key + UHID onto the patient row for easy lookup.
+        row.hospitalization_id = form_data.claim_case_id
+        case = form_data.claim_case
+        row.uhid = case.uhid if case is not None else None
         if form_data.patient is None:
             db.add(row)
             form_data.patient = row
@@ -179,6 +183,10 @@ def apply_sections(db: Session, form_data: FormData, sections: dict) -> None:
         non_icu_days = max(0, (row.expected_days or 0) - icu_days)
         row.room_rent_total = float(row.room_rent or 0) * non_icu_days
         row.icu_charges_total = float(row.icu_charges or 0) * icu_days
+        # Mirror the original pre-auth requested amount onto the form row for easy
+        # reading (= the cost-estimate Total Cost).
+        if row.total_cost is not None:
+            form_data.preauth_raised_amount = row.total_cost
         chronic = h.get("chronic_conditions")
         if isinstance(chronic, dict):
             for col, key in _HOSP_CHRONIC.items():

@@ -55,15 +55,14 @@ TABLE_DOCS: dict = {
     "pre_auth": {
         "desc": "Pre-auth/claim FORM snapshot. One PRE_AUTH row per case, plus a CLAIM row when a claim is raised. Has MULTIPLE rows per case — never fan out through it when counting cases.",
         "cols": {
-            "claim_case_id": {"d": "FK -> hospitalization.id."},
-            "stage": {"d": "Which phase this snapshot belongs to.", "enum": ["PRE_AUTH", "CLAIM"]},
-            "draft_state": {"d": "FORM lifecycle ONLY (is the form drafted/submitted) — NOT the outcome.", "enum": ["DRAFT", "SUBMITTED"]},
+            "hospitalization_id": {"d": "FK -> hospitalization.id (the case)."},
+            "hospital_id": {"d": "FK -> hospitals.id (the case's hospital; denormalised)."},
             "preauth_status": {"d": "The case's PRE-AUTH workflow status mirrored onto the PRE_AUTH row, FROZEN once the claim is raised. Use for 'pre-auth status' questions.", "enum": _PREAUTH_STATUS_ENUM},
-            "claimed_amount": {"d": "Claim-stage claimed amount (NULL for pre-auth rows)."},
-            "remarks": {"d": "Free-text remarks."},
+            "preauth_raised_amount": {"d": "Original pre-auth requested amount (the cost-estimate total)."},
+            "preauth_approved_amount": {"d": "Pre-auth approved amount (mirrors hospitalization.approved_amount)."},
         },
     },
-    "pre_auth_patient": {
+    "patient_personal_detail": {
         "desc": "Patient/insured details for a pre_auth form. THE ONLY place patient_name lives.",
         "cols": {
             "form_data_id": {"d": "FK -> pre_auth.id (join patients via this, NOT via uhid)."},
@@ -98,7 +97,10 @@ TABLE_DOCS: dict = {
     "claims": {
         "desc": "Final claim (post pre-auth) per case. One row per claim.",
         "cols": {
-            "claim_case_id": {"d": "FK -> hospitalization.id. Count DISTINCT of this for 'pre-auths converted to claims'."},
+            "hospitalization_id": {"d": "FK -> hospitalization.id (the case). Count DISTINCT of this for 'pre-auths converted to claims'."},
+            "hospital_id": {"d": "FK -> hospitals.id (the case's hospital; denormalised)."},
+            "uhid": {"d": "Patient UHID (denormalised from the case)."},
+            "claim_number": {"d": "Insurer claim/authorization number (denormalised from the case)."},
             "claimed_amount": {"d": "Amount claimed in the claim submission (money)."},
             "approved_amount": {"d": "Claim-stage approved amount (money)."},
             "status": {"d": "Claim status.", "enum": ["SUBMITTED", "APPROVED", "PARTIALLY_APPROVED", "DENIED"]},
@@ -121,12 +123,47 @@ TABLE_DOCS: dict = {
         "desc": "Settlement LINE — one row per claim within a settlement batch. Has settled_amount per claim.",
         "cols": {
             "batch_id": {"d": "FK -> settlement_batch.id (join here to get settlement_date/insurer)."},
-            "claim_case_id": {"d": "FK -> hospitalization.id (may be NULL if unmatched)."},
+            "hospitalization_id": {"d": "FK -> hospitalization.id (the case; may be NULL if unmatched)."},
             "claim_number": {"d": "Insurer claim number on the remittance."},
             "settled_amount": {"d": "Amount settled/paid for this claim (money; SUM for 'settled/paid amount')."},
             "claim_raised_amount": {"d": "Amount that had been claimed/raised."},
             "disallowance": {"d": "Amount disallowed (raised minus settled)."},
             "is_matched": {"d": "Whether this line was matched to a known case.", "enum": ["true", "false"]},
+            "hospital_id": {"d": "FK -> hospitals.id (the batch's hospital; denormalised, always set)."},
+            "uhid": {"d": "Patient UHID of the matched case (denormalised; NULL when unmatched)."},
+        },
+    },
+    "preauth_status_tracking": {
+        "desc": "PRE-AUTH status-transition log (for status/turn-around-time questions). One case -> MANY rows; never fan out through it when counting cases.",
+        "cols": {
+            "hospitalization_id": {"d": "FK -> hospitalization.id (the case). NON-unique — many rows per case."},
+            "hospital_id": {"d": "FK -> hospitals.id (the case's hospital; denormalised)."},
+            "uhid": {"d": "Patient UHID (denormalised)."},
+            "email_id": {"d": "FK -> claim_case_emails.id — the email that drove this transition (join for email type/subject/ai_suggested_*)."},
+            "from_status": {"d": "Status before the change (NULL for the very first; first logged row is DRAFT->SUBMITTED)."},
+            "to_status": {"d": "Status after the change."},
+            "turn_around_time": {"d": "Interval spent from_status -> to_status (e.g. '1 day 00:20:30'). EXTRACT(EPOCH FROM ...) to aggregate/average."},
+            "turn_around_time_text": {"d": "Human-readable TAT, e.g. '1 day 2 min 20 sec', '55 sec'. Use for display; use turn_around_time for math."},
+            "document_link": {"d": "JSONB array of file paths on the status's email — both email attachments and uploaded case documents (NULL when none)."},
+            "remark": {"d": "Free-text note for the transition."},
+            "created_at": {"d": "When the transition happened — order by this for the timeline."},
+        },
+    },
+    "claim_status_tracking": {
+        "desc": "CLAIM status-transition log (for claim status/turn-around-time questions). One case -> MANY rows; never fan out through it when counting cases.",
+        "cols": {
+            "hospitalization_id": {"d": "FK -> hospitalization.id (the case). NON-unique — many rows per case."},
+            "hospital_id": {"d": "FK -> hospitals.id (the case's hospital; denormalised)."},
+            "uhid": {"d": "Patient UHID (denormalised)."},
+            "claim_number": {"d": "Insurer claim/authorization number (denormalised)."},
+            "email_id": {"d": "FK -> claim_case_emails.id — the email that drove this transition."},
+            "from_status": {"d": "Status before the change, CLAIM_-prefixed (NULL for the first; first logged row is CLAIM_SUBMITTED)."},
+            "to_status": {"d": "Claim-stage status after the change, always CLAIM_-prefixed: CLAIM_SUBMITTED, CLAIM_APPROVED, CLAIM_PARTIALLY_APPROVED, CLAIM_DENIED, CLAIM_ADR_SUBMITTED, CLAIM_ADR_NMI, CLAIM_CANCELLED."},
+            "turn_around_time": {"d": "Interval spent from_status -> to_status. EXTRACT(EPOCH FROM ...) to aggregate/average."},
+            "turn_around_time_text": {"d": "Human-readable TAT, e.g. '1 day 2 min 20 sec'. Use for display; use turn_around_time for math."},
+            "document_link": {"d": "JSONB array of file paths on the status's email — attachments + uploaded case documents (NULL when none)."},
+            "remark": {"d": "The claim remark for this transition."},
+            "created_at": {"d": "When the transition happened — order by this for the timeline."},
         },
     },
     "status_history": {
@@ -153,9 +190,9 @@ TABLE_DOCS: dict = {
         },
     },
     "claim_bill_item": {
-        "desc": "Per-line bill breakdown on a claim-stage pre_auth row (label + amount).",
+        "desc": "Per-line claim bill breakdown (label + amount), one claim per case.",
         "cols": {
-            "form_data_id": {"d": "FK -> pre_auth.id."},
+            "hospitalization_id": {"d": "FK -> hospitalization.id (the case)."},
             "label": {"d": "Bill line label (e.g. room rent, pharmacy)."},
             "amount": {"d": "Line amount (money)."},
         },
@@ -176,10 +213,6 @@ TABLE_DOCS: dict = {
             "rohini_id": {"d": "ROHINI registration id."},
             "email": {"d": "Hospital contact email."},
         },
-    },
-    "settlements": {
-        "desc": "DEPRECATED and empty — do NOT use. Settlements live in settlement_batch + settlement_item.",
-        "cols": {},
     },
 }
 

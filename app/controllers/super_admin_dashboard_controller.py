@@ -218,10 +218,10 @@ def _funnel(db: Session, params: dict) -> list[FunnelStep]:
                AND case_status <> 'CANCELLED'
         ),
         requested AS (
-            SELECT COUNT(DISTINCT pa.claim_case_id) AS cnt,
+            SELECT COUNT(DISTINCT pa.hospitalization_id) AS cnt,
                    COALESCE(SUM(s.total_cost), 0)    AS amt
               FROM cases c
-              JOIN pre_auth pa ON pa.claim_case_id = c.id AND pa.stage = 'PRE_AUTH'
+              JOIN pre_auth pa ON pa.hospitalization_id = c.id AND pa.stage = 'PRE_AUTH'
               JOIN pre_auth_stay s ON s.form_data_id = pa.id
         ),
         approved AS (
@@ -235,13 +235,13 @@ def _funnel(db: Session, params: dict) -> list[FunnelStep]:
             SELECT COUNT(*) AS cnt,
                    COALESCE(SUM(cl.claimed_amount), 0) AS amt
               FROM cases c
-              JOIN claims cl ON cl.claim_case_id = c.id
+              JOIN claims cl ON cl.hospitalization_id = c.id
         ),
         claim_approved AS (
             SELECT COUNT(*) AS cnt,
                    COALESCE(SUM(cl.approved_amount), 0) AS amt
               FROM cases c
-              JOIN claims cl ON cl.claim_case_id = c.id
+              JOIN claims cl ON cl.hospitalization_id = c.id
              WHERE cl.approved_amount IS NOT NULL AND cl.approved_amount > 0
         ),
         invoiced AS (
@@ -473,13 +473,13 @@ def _status_distribution(db: Session) -> list[StatusBucket]:
             COUNT(*) FILTER (
                 WHERE h.current_stage = 'PRE_AUTH'
                   AND h.approved_amount IS NOT NULL AND h.approved_amount > 0
-                  AND NOT EXISTS (SELECT 1 FROM claims WHERE claim_case_id = h.id)
+                  AND NOT EXISTS (SELECT 1 FROM claims WHERE hospitalization_id = h.id)
             ) AS pre_auth_approved,
             COUNT(*) FILTER (
                 WHERE h.current_stage = 'CLAIM' AND h.case_status = 'CLAIM_SUBMITTED'
             ) AS claim_submitted,
             COUNT(*) FILTER (
-                WHERE EXISTS (SELECT 1 FROM claims c WHERE c.claim_case_id = h.id
+                WHERE EXISTS (SELECT 1 FROM claims c WHERE c.hospitalization_id = h.id
                                 AND c.approved_amount IS NOT NULL AND c.approved_amount > 0)
                   AND NOT EXISTS (SELECT 1 FROM invoice WHERE claim_case_id = h.id)
             ) AS claim_approved_no_invoice,
@@ -556,8 +556,8 @@ def _recent_activity(db: Session, params: dict, limit: int = 20) -> list[Activit
                pp.name AS provider_name,
                (SELECT pp2.patient_name
                   FROM pre_auth pa
-                  JOIN pre_auth_patient pp2 ON pp2.form_data_id = pa.id
-                 WHERE pa.claim_case_id = h.id AND pa.stage <> 'CLAIM'
+                  JOIN patient_personal_detail pp2 ON pp2.form_data_id = pa.id
+                 WHERE pa.hospitalization_id = h.id AND pa.stage <> 'CLAIM'
                  ORDER BY pa.created_at DESC
                  LIMIT 1) AS patient_name
           FROM status_history sh

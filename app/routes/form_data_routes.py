@@ -50,12 +50,3 @@ def update_form_data(
     current_user: User = Depends(get_current_user),
 ):
     return form_data_controller.update_form_data(db, form_data_id, payload)
-
-
-@router.post("/{form_data_id}/submit", response_model=FormDataResponse)
-def submit_form_data(
-    form_data_id: int,
-    db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
-):
-    return form_data_controller.submit_form_data(db, form_data_id)

@@ -6,6 +6,9 @@ from pydantic import BaseModel, Field
 
 # ---- Header (settlement-level) ----------------------------------------------
 class SettlementHeader(BaseModel):
+    # Structured insurer link (AI-suggested on extract, editable). tpa_insurer
+    # keeps the raw extracted name.
+    policy_provider_id: UUID | None = None
     tpa_insurer: str | None = None
     total_settlement_amount: float | None = None
     payment_mode: str | None = None

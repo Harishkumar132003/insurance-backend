@@ -36,8 +36,9 @@ logger = logging.getLogger(__name__)
 # nothing else). `patients` is deliberately absent — it has no tenant column.
 ALLOWED_TABLES = [
     "hospitals", "hospitalization","hospital_provider_mappings",
-    "pre_auth", "pre_auth_patient", "pre_auth_stay", "pre_auth_treatment",
-    "claims", "settlements", "settlement_batch", "settlement_item", "status_history", "claim_case_emails", "claim_bill_item",
+    "pre_auth", "patient_personal_detail", "pre_auth_stay", "pre_auth_treatment",
+    "claims", "settlement_batch", "settlement_item", "status_history", "claim_case_emails", "claim_bill_item",
+    "preauth_status_tracking", "claim_status_tracking",
 ]
 _ALLOWED_SET = set(ALLOWED_TABLES)
 
@@ -55,27 +56,34 @@ policy provider / TPA. Key tables (use get_schema for exact columns):
   ENHANCEMENT_APPROVED/DENIED, ADR_NMI, CANCELLED. "Awaiting insurer" =
   status in (SUBMITTED, ENHANCE_SUBMITTED, RECONSIDER, ADR_SUBMITTED,
   CLAIM_SUBMITTED, CLAIM_ADR_SUBMITTED, CLAIM_RECONSIDER).
-- pre_auth — pre-auth form snapshot (form_data), FK claim_case_id -> hospitalization.id.
-- pre_auth_patient / pre_auth_stay / pre_auth_treatment — patient, hospitalisation
+- pre_auth — pre-auth form snapshot (form_data), FK hospitalization_id -> hospitalization.id.
+- patient_personal_detail / pre_auth_stay / pre_auth_treatment — patient, hospitalisation
   stay, and treatment details; FK form_data_id -> pre_auth.id.
-- claims — final bill per case, FK claim_case_id -> hospitalization.id.
-- SETTLEMENTS live in settlement_batch + settlement_item (the old `settlements`
-  table is DEPRECATED and empty — never use it):
+- claims — final bill per case, FK hospitalization_id -> hospitalization.id.
+- SETTLEMENTS live in settlement_batch + settlement_item:
   - settlement_batch — settlement header: total_settlement_amount, settlement_date,
     tpa_insurer, utr_number, payment_mode; FK hospital_id.
   - settlement_item — per-claim settled line: settled_amount, claim_raised_amount,
-    disallowance, claim_number, is_matched; FK batch_id -> settlement_batch.id,
-    claim_case_id -> hospitalization.id.
+    disallowance, claim_number, is_matched, hospital_id, uhid; FK batch_id ->
+    settlement_batch.id, hospitalization_id -> hospitalization.id.
 - "Invoice" / "payment" questions: the invoice tables are DEPRECATED and not
   queryable. Treat any invoice / payment question as a SETTLEMENT question and
   answer it from settlement_batch / settlement_item (see SETTLEMENTS above).
 - status_history — audit timeline of status changes, FK claim_case_id.
+- preauth_status_tracking — PRE-AUTH status-transition log for status/TAT
+  questions: from_status, to_status, turn_around_time (interval), document_link
+  (jsonb array of attachment paths), remark, uhid; FK hospitalization_id ->
+  hospitalization.id (one case -> many rows). First row is DRAFT->SUBMITTED.
+- claim_status_tracking — CLAIM status-transition log (same shape as
+  preauth_status_tracking, incl. remark = the claim remark); FK
+  hospitalization_id -> hospitalization.id. Statuses are CLAIM_-prefixed
+  (CLAIM_SUBMITTED, CLAIM_APPROVED, ...); first row is CLAIM_SUBMITTED.
 - query_logs — ADR / "need more info" requests, FK claim_case_id.
 - claim_case_emails / _attachments / claim_case_documents / part_d_letters — case correspondence & docs.
 - policy_provider_configs — insurers/TPAs (provider names), joined via
   hospitalization.policy_provider_id.
-- claim_bill_item — per-line bill breakdown (label, amount) on a claim-stage
-  pre_auth row; FK form_data_id -> pre_auth.id.
+- claim_bill_item — per-line claim bill breakdown (label, amount); FK
+  hospitalization_id -> hospitalization.id (one claim per case).
 - hospital_provider_mappings — which insurers/TPAs this hospital is empanelled
   with, incl. MoU room-charge terms (is_active); FK hospital_id, policy_provider_id.
 - hospitals — the hospital record itself (name, address, rohini_id, email). One row.
@@ -95,8 +103,8 @@ MONEY METRICS — which COLUMN to use (an "amount" is a number to SUM, NOT a sta
 - approved / sanctioned amount -> SUM(hospitalization.approved_amount)
   (cumulative pre-auth amount approved by the insurer).
 - claimed amount (claim stage) -> SUM(claims.claimed_amount).
-- settled / paid amount -> SUM(settlement_item.settled_amount) (NOT the
-  deprecated empty `settlements` table). Settlement DATE/insurer/UTR are on
+- settled / paid amount -> SUM(settlement_item.settled_amount).
+  Settlement DATE/insurer/UTR are on
   settlement_batch; for date-filtered settlement questions join
   settlement_item.batch_id -> settlement_batch.id and filter settlement_date.
   FAN-OUT WARNING: settlement_batch is a HEADER (one total_settlement_amount per
@@ -127,7 +135,7 @@ QUERY RULES — avoid these common mistakes:
   rows per case (one PRE_AUTH and often a CLAIM row), so joining it multiplies
   counts and sums. To count or aggregate cases/claims, query the target table
   directly or use COUNT(DISTINCT claim_case_id) / SUM over distinct cases. Example:
-  pre-auths CONVERTED TO CLAIMS = COUNT(DISTINCT claim_case_id) FROM claims (or
+  pre-auths CONVERTED TO CLAIMS = COUNT(DISTINCT hospitalization_id) FROM claims (or
   cases having a claims row) — do NOT join pre_auth to claims for this.
 - "BY / PER / FOR EACH X" means GROUP BY X — return one row per group, not a
   single total. E.g. "approved amount by insurer" -> JOIN policy_provider_configs
@@ -136,8 +144,6 @@ QUERY RULES — avoid these common mistakes:
   current_stage for outcomes or workflow states. Workflow states live in
   case_status. "Awaiting insurer" = case_status IN (SUBMITTED, ENHANCE_SUBMITTED,
   RECONSIDER, ADR_SUBMITTED, CLAIM_SUBMITTED, CLAIM_ADR_SUBMITTED, CLAIM_RECONSIDER).
-- pre_auth.draft_state is the FORM state (DRAFT/SUBMITTED only) — NEVER use it for
-  pre-auth outcomes or workflow status.
 - pre_auth.preauth_status is the case's PRE-AUTH WORKFLOW status mirrored onto the
   PRE_AUTH row (DRAFT, SUBMITTED, ENHANCE_SUBMITTED, APPROVED, PARTIALLY_APPROVED,
   DENIED, ENHANCEMENT_APPROVED/DENIED, CANCELLED, ...), FROZEN once the claim is
@@ -151,17 +157,17 @@ QUERY RULES — avoid these common mistakes:
 - RANKING by a nullable amount (highest/top/max approved_amount etc.): exclude
   NULLs — add "WHERE <col> IS NOT NULL" (or "ORDER BY <col> DESC NULLS LAST"),
   else NULLs sort first and you return an empty/null top row.
-- PATIENT NAME lives ONLY in pre_auth_patient.patient_name. The join
-  `pre_auth p ON p.claim_case_id = h.id AND p.stage='PRE_AUTH'` is EXACTLY ONE
+- PATIENT NAME lives ONLY in patient_personal_detail.patient_name. The join
+  `pre_auth p ON p.hospitalization_id = h.id AND p.stage='PRE_AUTH'` is EXACTLY ONE
   pre_auth row per case, so a plain JOIN does NOT fan out — use it directly. Do
-  NOT pick the row with a "(SELECT id FROM pre_auth WHERE claim_case_id=h.id
+  NOT pick the row with a "(SELECT id FROM pre_auth WHERE hospitalization_id=h.id
   LIMIT 1)" subquery (arbitrary row, mismatches patient↔claim), and NEVER join
   uhid = patient_name. Canonical "top patient by <amount>" query:
     SELECT pp.patient_name, SUM(c.claimed_amount) AS total
     FROM claims c
-    JOIN hospitalization h ON h.id = c.claim_case_id
-    JOIN pre_auth p ON p.claim_case_id = h.id AND p.stage = 'PRE_AUTH'
-    JOIN pre_auth_patient pp ON pp.form_data_id = p.id
+    JOIN hospitalization h ON h.id = c.hospitalization_id
+    JOIN pre_auth p ON p.hospitalization_id = h.id AND p.stage = 'PRE_AUTH'
+    JOIN patient_personal_detail pp ON pp.form_data_id = p.id
     GROUP BY pp.patient_name ORDER BY total DESC LIMIT 1;
 
 TIME RANGES: "this month" -> created_at >= date_trunc('month', CURRENT_DATE);
@@ -398,17 +404,20 @@ Decide, using the MONEY METRICS and table guide below:
 - Any named filters (patient, provider, status) as entities.
 - Which tables to read — include EVERY table in the join chain (the bridge tables
   too, not just the "main" one), with the exact FK joins from TABLE/JOIN PATHS
-  below. Never select the deprecated `settlements` table.
+  below.
 - The ordered steps the executor should take (get_schema, then run_query, ...).
 
 TABLE/JOIN PATHS — use these exact FK joins; do not invent others, and put ALL
 tables in the chain into `tables`:
-- patient info -> pre_auth_patient.form_data_id = pre_auth.id (stage='PRE_AUTH'),
-  then pre_auth.claim_case_id = hospitalization.id.
-- pre_auth / claims / status_history / claim_case_emails ->
+- patient info -> patient_personal_detail.form_data_id = pre_auth.id (stage='PRE_AUTH'),
+  then pre_auth.hospitalization_id = hospitalization.id.
+- status_history / claim_case_emails ->
   <table>.claim_case_id = hospitalization.id.
-- pre_auth_stay / pre_auth_treatment / claim_bill_item ->
+- pre_auth / claims -> <table>.hospitalization_id = hospitalization.id (these FK
+  columns are named hospitalization_id, not claim_case_id).
+- pre_auth_stay / pre_auth_treatment ->
   <table>.form_data_id = pre_auth.id  (then pre_auth -> hospitalization as above).
+- claim_bill_item -> claim_bill_item.hospitalization_id = hospitalization.id.
 - settlements -> settlement_item.batch_id = settlement_batch.id
   (settlement_batch holds hospital_id + settlement_date).
 
@@ -503,13 +512,15 @@ def _planner_system_prompt() -> str:
 # planner picks only a leaf table, we add these so the executor's cubes always
 # carry the full join chain (it can't write a correct join without the bridge).
 _TABLE_DEPS = {
-    "pre_auth_patient": ["pre_auth", "hospitalization"],
+    "patient_personal_detail": ["pre_auth", "hospitalization"],
     "pre_auth_stay": ["pre_auth", "hospitalization"],
     "pre_auth_treatment": ["pre_auth", "hospitalization"],
-    "claim_bill_item": ["pre_auth", "hospitalization"],
+    "claim_bill_item": ["hospitalization"],
     "pre_auth": ["hospitalization"],
     "claims": ["hospitalization"],
     "status_history": ["hospitalization"],
+    "preauth_status_tracking": ["hospitalization"],
+    "claim_status_tracking": ["hospitalization"],
     "claim_case_emails": ["hospitalization"],
     "settlement_item": ["settlement_batch"],
 }

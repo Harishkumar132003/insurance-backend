@@ -2,12 +2,16 @@
 
 import logging
 import os
+import re
+from difflib import SequenceMatcher
 from uuid import UUID
 
 from fastapi import HTTPException, status
 from sqlalchemy.orm import Session
 
 from app.models.claim_case import ClaimCase
+from app.models.hospital_provider_mapping import HospitalProviderMapping
+from app.models.policy_provider_config import PolicyProviderConfig
 from app.models.settlement_batch import SettlementBatch
 from app.models.settlement_item import SettlementItem
 from app.schemas.settlement_batch import (
@@ -25,6 +29,46 @@ from app.utils import file_storage
 logger = logging.getLogger(__name__)
 
 
+def _norm(s: str | None) -> str:
+    return re.sub(r"[^a-z0-9]", "", (s or "").lower())
+
+
+def _suggest_provider(db: Session, hospital_id: UUID, tpa_insurer: str | None):
+    """Best-matching mapped provider for an extracted insurer/TPA name, by fuzzy
+    comparison against each provider's name / tpa_name. Returns a provider id or
+    None (no confident match)."""
+    target = _norm(tpa_insurer)
+    if not target:
+        return None
+    rows = (
+        db.query(PolicyProviderConfig)
+        .join(
+            HospitalProviderMapping,
+            HospitalProviderMapping.policy_provider_id == PolicyProviderConfig.id,
+        )
+        .filter(HospitalProviderMapping.hospital_id == hospital_id)
+        .all()
+    )
+    best_id, best_score = None, 0.0
+    for p in rows:
+        for cand in (p.name, p.tpa_name):
+            c = _norm(cand)
+            if not c:
+                continue
+            score = 1.0 if (c == target or c in target or target in c) \
+                else SequenceMatcher(None, target, c).ratio()
+            if score > best_score:
+                best_score, best_id = score, p.id
+    return best_id if best_score >= 0.5 else None
+
+
+def _provider_name(db: Session, provider_id) -> str | None:
+    if not provider_id:
+        return None
+    p = db.query(PolicyProviderConfig).filter(PolicyProviderConfig.id == provider_id).first()
+    return p.name if p else None
+
+
 def extract(db: Session, hospital_id: UUID, file_bytes: bytes, filename: str | None,
             content_type: str | None) -> SettlementExtractResponse:
     """Parse an uploaded settlement file into editable header + items, annotate
@@ -34,6 +78,13 @@ def extract(db: Session, hospital_id: UUID, file_bytes: bytes, filename: str | N
     if not file_bytes:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Empty file.")
     data = settlement_extraction_service.extract_settlement_data(file_bytes, filename, content_type)
+
+    # AI-suggest the provider from the extracted insurer/TPA name (editable in UI).
+    suggested = _suggest_provider(db, hospital_id, data["header"].get("tpa_insurer"))
+    data["header"]["policy_provider_id"] = suggested
+    if suggested:
+        # tpa_insurer mirrors the selected provider's name.
+        data["header"]["tpa_insurer"] = _provider_name(db, suggested) or data["header"].get("tpa_insurer")
 
     numbers = {(it.get("claim_number") or "").strip() for it in data["items"]}
     matches = _match_numbers(db, hospital_id, numbers)
@@ -117,7 +168,9 @@ def save(db: Session, hospital_id: UUID, payload: SettlementSavePayload) -> Sett
     h = payload.header
     batch = SettlementBatch(
         hospital_id=hospital_id,
-        tpa_insurer=h.tpa_insurer,
+        policy_provider_id=h.policy_provider_id,
+        # tpa_insurer mirrors the selected provider's name when one is chosen.
+        tpa_insurer=_provider_name(db, h.policy_provider_id) or h.tpa_insurer,
         total_settlement_amount=h.total_settlement_amount,
         payment_mode=h.payment_mode,
         payment_batch=h.payment_batch,
@@ -162,7 +215,8 @@ def update(db: Session, hospital_id: UUID, batch_id: UUID,
     batch = get_batch(db, hospital_id, batch_id)
 
     h = payload.header
-    batch.tpa_insurer = h.tpa_insurer
+    batch.policy_provider_id = h.policy_provider_id
+    batch.tpa_insurer = _provider_name(db, h.policy_provider_id) or h.tpa_insurer
     batch.total_settlement_amount = h.total_settlement_amount
     batch.payment_mode = h.payment_mode
     batch.payment_batch = h.payment_batch
@@ -248,6 +302,7 @@ def _to_response(batch: SettlementBatch) -> SettlementBatchResponse:
     return SettlementBatchResponse(
         id=batch.id,
         header=SettlementHeader(
+            policy_provider_id=batch.policy_provider_id,
             tpa_insurer=batch.tpa_insurer,
             total_settlement_amount=float(batch.total_settlement_amount) if batch.total_settlement_amount is not None else None,
             payment_mode=batch.payment_mode,

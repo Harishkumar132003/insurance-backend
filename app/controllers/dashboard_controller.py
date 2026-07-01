@@ -5,7 +5,7 @@ aggregation pushed to Postgres — the controller assembles the typed response
 without doing any per-row work in Python. This keeps the endpoint <100ms even
 for tens of thousands of cases as long as the existing indexes are in place
 (hospitalization.hospital_id, status_history.claim_case_id,
-claim.claim_case_id, invoice.claim_case_id, pre_auth_patient.form_data_id).
+claim.claim_case_id, invoice.claim_case_id, patient_personal_detail.form_data_id).
 """
 
 from datetime import date, datetime, timedelta, timezone
@@ -237,10 +237,10 @@ def _funnel(db: Session, params: dict) -> list[FunnelStep]:
         ),
         requested AS (
             -- Latest PRE_AUTH form per case, summed.
-            SELECT COUNT(DISTINCT pa.claim_case_id) AS cnt,
+            SELECT COUNT(DISTINCT pa.hospitalization_id) AS cnt,
                    COALESCE(SUM(s.total_cost), 0)    AS amt
               FROM cases c
-              JOIN pre_auth pa ON pa.claim_case_id = c.id AND pa.stage = 'PRE_AUTH'
+              JOIN pre_auth pa ON pa.hospitalization_id = c.id AND pa.stage = 'PRE_AUTH'
               JOIN pre_auth_stay s ON s.form_data_id = pa.id
         ),
         approved AS (
@@ -254,13 +254,13 @@ def _funnel(db: Session, params: dict) -> list[FunnelStep]:
             SELECT COUNT(*) AS cnt,
                    COALESCE(SUM(cl.claimed_amount), 0) AS amt
               FROM cases c
-              JOIN claims cl ON cl.claim_case_id = c.id
+              JOIN claims cl ON cl.hospitalization_id = c.id
         ),
         claim_approved AS (
             SELECT COUNT(*) AS cnt,
                    COALESCE(SUM(cl.approved_amount), 0) AS amt
               FROM cases c
-              JOIN claims cl ON cl.claim_case_id = c.id
+              JOIN claims cl ON cl.hospitalization_id = c.id
              WHERE cl.approved_amount IS NOT NULL AND cl.approved_amount > 0
         ),
         invoiced AS (
@@ -308,8 +308,8 @@ def _recent_activity(db: Session, params: dict, limit: int = 5) -> list[Activity
                pp.name AS provider_name,
                (SELECT pp2.patient_name
                   FROM pre_auth pa
-                  JOIN pre_auth_patient pp2 ON pp2.form_data_id = pa.id
-                 WHERE pa.claim_case_id = h.id AND pa.stage <> 'CLAIM'
+                  JOIN patient_personal_detail pp2 ON pp2.form_data_id = pa.id
+                 WHERE pa.hospitalization_id = h.id AND pa.stage <> 'CLAIM'
                  ORDER BY pa.created_at DESC
                  LIMIT 1) AS patient_name
           FROM status_history sh
@@ -443,13 +443,13 @@ def _status_distribution(db: Session, hospital_id: UUID) -> list[StatusBucket]:
             COUNT(*) FILTER (
                 WHERE h.current_stage = 'PRE_AUTH'
                   AND h.approved_amount IS NOT NULL AND h.approved_amount > 0
-                  AND NOT EXISTS (SELECT 1 FROM claims WHERE claim_case_id = h.id)
+                  AND NOT EXISTS (SELECT 1 FROM claims WHERE hospitalization_id = h.id)
             ) AS pre_auth_approved,
             COUNT(*) FILTER (
                 WHERE h.current_stage = 'CLAIM' AND h.case_status = 'CLAIM_SUBMITTED'
             ) AS claim_submitted,
             COUNT(*) FILTER (
-                WHERE EXISTS (SELECT 1 FROM claims c WHERE c.claim_case_id = h.id
+                WHERE EXISTS (SELECT 1 FROM claims c WHERE c.hospitalization_id = h.id
                                 AND c.approved_amount IS NOT NULL AND c.approved_amount > 0)
                   AND NOT EXISTS (SELECT 1 FROM invoice WHERE claim_case_id = h.id)
             ) AS claim_approved_no_invoice,
@@ -532,7 +532,7 @@ def _top_diagnoses(db: Session, params: dict, limit: int = 5) -> list[DiagnosisS
     rows = db.execute(text("""
         SELECT pt.provisional_diagnosis AS diagnosis, COUNT(*) AS n
           FROM pre_auth pa
-          JOIN hospitalization h ON h.id = pa.claim_case_id
+          JOIN hospitalization h ON h.id = pa.hospitalization_id
           JOIN pre_auth_treatment pt ON pt.form_data_id = pa.id
          WHERE h.hospital_id = :hospital_id
            AND pa.created_at >= :since

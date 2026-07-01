@@ -571,7 +571,6 @@ def get_provider_queue(
         form_data = (
             db.query(FormData)
             .filter(FormData.claim_case_id == cc.id)
-            .filter(FormData.stage != "CLAIM")
             .order_by(FormData.created_at.desc())
             .first()
         )

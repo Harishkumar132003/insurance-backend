@@ -15,8 +15,6 @@ def create_form_data(db: Session, payload: FormDataCreate) -> FormData:
     # Pre-auth content lives in the typed pre_auth_* tables.
     form_data = FormData(
         claim_case_id=payload.claim_case_id,
-        stage="PRE_AUTH",
-        draft_state="DRAFT",
     )
     db.add(form_data)
     db.flush()
@@ -34,7 +32,9 @@ def update_form_data(db: Session, form_data_id: int, payload: FormDataUpdate) ->
             detail="Form data not found",
         )
 
-    if form_data.draft_state == "SUBMITTED":
+    # A pre-auth form is "submitted" once the case leaves DRAFT (case_status is
+    # mirrored onto preauth_status). Replaces the old draft_state flag.
+    if form_data.preauth_status != "DRAFT":
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Cannot edit a submitted form",
@@ -42,26 +42,6 @@ def update_form_data(db: Session, form_data_id: int, payload: FormDataUpdate) ->
 
     # Per-section column update (only sections present in the payload change).
     apply_sections(db, form_data, payload.sections)
-    db.commit()
-    db.refresh(form_data)
-    return form_data
-
-
-def submit_form_data(db: Session, form_data_id: int) -> FormData:
-    form_data = db.query(FormData).filter(FormData.id == form_data_id).first()
-    if not form_data:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Form data not found",
-        )
-
-    if form_data.draft_state == "SUBMITTED":
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Form already submitted",
-        )
-
-    form_data.draft_state = "SUBMITTED"
     db.commit()
     db.refresh(form_data)
     return form_data
@@ -86,8 +66,6 @@ def create_claim_and_form_data(
     # 2. Create FormData linked to the ClaimCase + write the typed sections.
     form_data = FormData(
         claim_case_id=claim_case.id,
-        stage="PRE_AUTH",
-        draft_state="DRAFT",
     )
     db.add(form_data)
     db.flush()

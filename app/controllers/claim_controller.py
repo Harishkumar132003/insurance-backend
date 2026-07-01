@@ -59,26 +59,9 @@ def _build_response(
     is_onboarded: bool,
     email_record_id: int | None,
 ) -> ClaimResponse:
-    # Latest claim-stage form row (written on raise) holds the breakdown.
-    form = (
-        db.query(FormData)
-        .filter(FormData.claim_case_id == claim_case.id, FormData.stage == "CLAIM")
-        .order_by(FormData.created_at.desc())
-        .first()
-    )
-    bill_breakdown: list[BillBreakdownItem] = []
+    # Bill breakdown lines are anchored on the case (claim_bill_item).
+    bill_breakdown = _bill_breakdown_for_case(db, claim_case.id)
     remarks: str | None = None
-    if form is not None:
-        for item in form.bill_items:
-            bill_breakdown.append(
-                BillBreakdownItem(
-                    label=item.label,
-                    amount=Decimal(str(item.amount)),
-                    rate=Decimal(str(item.rate)) if item.rate is not None else None,
-                    days=item.days,
-                )
-            )
-        remarks = form.remarks
 
     docs = (
         db.query(ClaimCaseDocument)
@@ -158,25 +141,13 @@ def raise_claim(
     )
     is_onboarded = bool(provider and provider.is_onboarded)
 
-    draft_form = _find_claim_draft(db, claim_case.id)
-    if draft_form is not None:
-        claim_form = draft_form
-        claim_form.draft_state = "SUBMITTED"
-    else:
-        claim_form = FormData(
-            claim_case_id=claim_case.id,
-            stage="CLAIM",
-            draft_state="SUBMITTED",
-        )
-        db.add(claim_form)
-    claim_form.stage = "CLAIM"
-    claim_form.claimed_amount = payload.claimed_amount
-    claim_form.remarks = payload.remarks
-    db.flush()
-    _replace_bill_items(db, claim_form, payload.bill_breakdown)
+    # Bill lines are anchored on the case (no claim-stage pre_auth row).
+    _replace_bill_items(db, claim_case.id, payload.bill_breakdown)
 
     claim = Claim(
         claim_case_id=claim_case.id,
+        uhid=claim_case.uhid,
+        claim_number=claim_case.claim_number,
         claimed_amount=payload.claimed_amount,
         status="SUBMITTED",
     )
@@ -341,14 +312,36 @@ def get_claim(db: Session, claim_case_id, current_user: User) -> ClaimResponse:
     )
 
 
-def _replace_bill_items(db: Session, form_data: FormData, items) -> None:
-    """Replace the claim-stage bill_breakdown lines on a form row."""
-    db.query(ClaimBillItem).filter(ClaimBillItem.form_data_id == form_data.id).delete(
+def _bill_item_rows(db: Session, claim_case_id):
+    """Raw claim_bill_item rows for a case, in display order."""
+    return (
+        db.query(ClaimBillItem)
+        .filter(ClaimBillItem.hospitalization_id == claim_case_id)
+        .order_by(ClaimBillItem.sort_order)
+        .all()
+    )
+
+
+def _bill_breakdown_for_case(db: Session, claim_case_id) -> list[BillBreakdownItem]:
+    return [
+        BillBreakdownItem(
+            label=it.label,
+            amount=Decimal(str(it.amount)),
+            rate=Decimal(str(it.rate)) if it.rate is not None else None,
+            days=it.days,
+        )
+        for it in _bill_item_rows(db, claim_case_id)
+    ]
+
+
+def _replace_bill_items(db: Session, claim_case_id, items) -> None:
+    """Replace the claim bill-breakdown lines for a case."""
+    db.query(ClaimBillItem).filter(ClaimBillItem.hospitalization_id == claim_case_id).delete(
         synchronize_session=False
     )
     for idx, it in enumerate(items or []):
         db.add(ClaimBillItem(
-            form_data_id=form_data.id,
+            hospitalization_id=claim_case_id,
             label=it.label,
             amount=it.amount,
             rate=getattr(it, "rate", None),
@@ -357,38 +350,20 @@ def _replace_bill_items(db: Session, form_data: FormData, items) -> None:
         ))
 
 
-def _find_claim_draft(db: Session, claim_case_id) -> FormData | None:
-    return (
-        db.query(FormData)
-        .filter(
-            FormData.claim_case_id == claim_case_id,
-            FormData.draft_state == "DRAFT",
-            FormData.stage == "CLAIM",
-        )
-        .order_by(FormData.created_at.desc())
-        .first()
-    )
-
-
-def _draft_to_response(draft: FormData | None) -> ClaimDraftResponse:
-    if draft is None:
+def _draft_to_response(db: Session, claim_case_id) -> ClaimDraftResponse:
+    rows = _bill_item_rows(db, claim_case_id)
+    if not rows:
         return ClaimDraftResponse(is_persisted=False)
-    items = [
-        BillBreakdownItem(
-            label=it.label,
-            amount=Decimal(str(it.amount)),
-            rate=Decimal(str(it.rate)) if it.rate is not None else None,
-            days=it.days,
-        )
-        for it in draft.bill_items
-    ]
-    claimed = Decimal(str(draft.claimed_amount)) if draft.claimed_amount is not None else None
+    items = _bill_breakdown_for_case(db, claim_case_id)
+    # Draft total is derived from the bill lines (no stored claimed_amount).
+    claimed = sum((i.amount for i in items), Decimal("0"))
+    updated = max((r.created_at for r in rows if r.created_at), default=None)
     return ClaimDraftResponse(
         is_persisted=True,
         bill_breakdown=items,
-        claimed_amount=claimed,
-        remarks=draft.remarks,
-        updated_at=draft.updated_at or draft.created_at,
+        claimed_amount=claimed if claimed > 0 else None,
+        remarks=None,
+        updated_at=updated,
     )
 
 
@@ -397,7 +372,10 @@ def get_claim_draft(db: Session, claim_case_id, current_user: User) -> ClaimDraf
     if not claim_case:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Claim case not found")
     _scope_to_user(claim_case, current_user)
-    return _draft_to_response(_find_claim_draft(db, claim_case.id))
+    # Once a claim exists, there is no draft.
+    if db.query(Claim.id).filter(Claim.claim_case_id == claim_case.id).first():
+        return ClaimDraftResponse(is_persisted=False)
+    return _draft_to_response(db, claim_case.id)
 
 
 def save_claim_draft(
@@ -414,23 +392,9 @@ def save_claim_draft(
             detail="Claim has already been raised; drafts are no longer applicable",
         )
 
-    draft = _find_claim_draft(db, claim_case.id)
-    if draft is None:
-        draft = FormData(
-            claim_case_id=claim_case.id,
-            stage="CLAIM",
-            draft_state="DRAFT",
-        )
-        db.add(draft)
-    draft.stage = "CLAIM"
-    draft.claimed_amount = payload.claimed_amount
-    draft.remarks = payload.remarks
-    db.flush()
-    _replace_bill_items(db, draft, payload.bill_breakdown)
-
+    _replace_bill_items(db, claim_case.id, payload.bill_breakdown)
     db.commit()
-    db.refresh(draft)
-    return _draft_to_response(draft)
+    return _draft_to_response(db, claim_case.id)
 
 
 def delete_claim_draft(db: Session, claim_case_id, current_user: User) -> None:
@@ -439,8 +403,10 @@ def delete_claim_draft(db: Session, claim_case_id, current_user: User) -> None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Claim case not found")
     _scope_to_user(claim_case, current_user)
 
-    draft = _find_claim_draft(db, claim_case.id)
-    if draft is None:
+    # A draft exists only if no claim has been raised and there are bill lines.
+    if db.query(Claim.id).filter(Claim.claim_case_id == claim_case.id).first():
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No draft to delete")
+    if not _bill_item_rows(db, claim_case.id):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No draft to delete")
 
     # Files uploaded for this draft live as ClaimCaseDocument rows with
@@ -450,5 +416,7 @@ def delete_claim_draft(db: Session, claim_case_id, current_user: User) -> None:
         ClaimCaseDocument.sent_email_id.is_(None),
     ).delete(synchronize_session=False)
 
-    db.delete(draft)
+    db.query(ClaimBillItem).filter(
+        ClaimBillItem.hospitalization_id == claim_case.id
+    ).delete(synchronize_session=False)
     db.commit()

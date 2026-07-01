@@ -88,7 +88,6 @@ def get_all_claims(
         form_data = (
             db.query(FormData)
             .filter(FormData.claim_case_id == cc.id)
-            .filter(FormData.stage != "CLAIM")
             .order_by(FormData.created_at.desc())
             .first()
         )
@@ -259,7 +258,6 @@ def get_claim_case(db: Session, claim_case_id, current_user=None) -> ClaimCase:
     latest_form = (
         db.query(FormData)
         .filter(FormData.claim_case_id == claim_case.id)
-        .filter(FormData.stage != "CLAIM")
         .order_by(FormData.created_at.desc())
         .first()
     )
