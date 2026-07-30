@@ -1,0 +1,215 @@
+# Cube data model for the `hospitalization` table (a.k.a. the "case").
+# Ref: https://docs.cube.dev/docs/data-modeling/cubes
+#
+# The central case record: one row per patient hospitalization/claim journey,
+# moving through stages (PRE_AUTH -> CLAIM -> ...). pre_auth, claims,
+# settlement_item and the status-tracking tables all hang off this row.
+cubes:
+  - name: hospitalization
+    sql_table: public.hospitalization
+    description: >
+      The case record spanning a patient's hospitalization: identity (uhid,
+      claim_number), insurer link, current stage, status and the approved amount.
+
+    joins:
+      - name: hospitals
+        sql: "{CUBE}.hospital_id = {hospitals}.id"
+        relationship: many_to_one
+      # The insurer/TPA for the case — enables grouping any case metric by provider.
+      - name: policy_provider_configs
+        sql: "{CUBE}.policy_provider_id = {policy_provider_configs}.id"
+        relationship: many_to_one
+      # Hub joins to the per-case children (each 1:1 with the case). Declaring
+      # them here lets Cube bridge child<->child queries (e.g. filter by
+      # patient_personal_detail.patient_name, return claims.status).
+      - name: pre_auth
+        sql: "{CUBE}.id = {pre_auth}.hospitalization_id"
+        relationship: one_to_one
+      - name: claims
+        sql: "{CUBE}.id = {claims}.hospitalization_id"
+        relationship: one_to_one
+      - name: patient_personal_detail
+        sql: "{CUBE}.id = {patient_personal_detail}.hospitalization_id"
+        relationship: one_to_one
+
+    dimensions:
+      - name: id
+        sql: id
+        type: string
+        primary_key: true
+        description: Primary key of the case (uuid).
+
+      - name: hospital_id
+        sql: hospital_id
+        type: string
+        description: FK to hospitals.id — the tenant hospital.
+
+      - name: policy_provider_id
+        sql: policy_provider_id
+        type: string
+        description: FK to policy_provider_configs.id — the insurer/TPA for this case.
+
+      - name: uhid
+        sql: uhid
+        type: string
+        description: Unique hospital patient identifier.
+
+      - name: claim_number
+        sql: claim_number
+        type: string
+        description: Claim number assigned once the case reaches the claim stage.
+
+      - name: current_stage
+        sql: current_stage
+        type: string
+        description: Current lifecycle stage, e.g. PRE_AUTH, CLAIM.
+
+      - name: case_status
+        sql: case_status
+        type: string
+        description: Detailed status within the current stage.
+
+      - name: preauth_outcome
+        sql: preauth_outcome
+        type: string
+        description: Outcome of the pre-auth stage (e.g. APPROVED, REJECTED).
+
+      - name: thread_id
+        sql: thread_id
+        type: string
+        description: Unique AI/email conversation thread identifier for the case.
+
+      - name: created_at
+        sql: created_at
+        type: time
+        description: When the case was created.
+
+      - name: updated_at
+        sql: updated_at
+        type: time
+        description: When the case was last updated.
+
+    # Segments = named filters mapping plain admin questions to slices.
+    segments:
+      # --- Stage ---
+      - name: pre_auth_stage
+        sql: "{CUBE}.current_stage = 'PRE_AUTH'"
+        description: >
+          Cases currently in the pre-authorization stage — i.e. pre-auths NOT yet
+          moved/converted to claims (no claim raised yet).
+
+      - name: claim_stage
+        sql: "{CUBE}.current_stage = 'CLAIM'"
+        description: Cases that have reached the claim stage (pre-auth converted into a claim).
+
+      # --- Lifecycle ---
+      - name: cancelled
+        sql: "{CUBE}.case_status = 'CANCELLED'"
+        description: Cancelled cases (terminal — no further action).
+
+      - name: active
+        sql: "{CUBE}.case_status <> 'CANCELLED'"
+        description: Active (non-cancelled) cases.
+
+      # --- Pre-auth outcome of the case ---
+      - name: preauth_approved
+        sql: "{CUBE}.preauth_outcome IN ('APPROVED', 'PARTIALLY_APPROVED', 'ENHANCEMENT_APPROVED')"
+        description: Cases whose pre-auth was approved (full, partial, or enhancement).
+
+      - name: preauth_denied
+        sql: "{CUBE}.preauth_outcome IN ('DENIED', 'ENHANCEMENT_DENIED')"
+        description: Cases whose pre-auth was denied.
+
+      # --- Claim outcome (case_status is CLAIM_-prefixed at the claim stage) ---
+      - name: claim_approved
+        sql: "{CUBE}.case_status IN ('CLAIM_APPROVED', 'CLAIM_PARTIALLY_APPROVED')"
+        description: Cases with an approved claim (full or partial).
+
+      - name: claim_pending
+        sql: "{CUBE}.case_status IN ('CLAIM_SUBMITTED', 'CLAIM_ADR_SUBMITTED', 'CLAIM_RECONSIDER')"
+        description: Cases whose claim is awaiting the insurer's decision.
+
+      - name: awaiting_insurer
+        sql: "{CUBE}.case_status IN ('SUBMITTED', 'ENHANCE_SUBMITTED', 'ADR_SUBMITTED', 'RECONSIDER', 'CLAIM_SUBMITTED', 'CLAIM_ADR_SUBMITTED', 'CLAIM_RECONSIDER')"
+        description: >
+          Cases awaiting the insurer's response at EITHER stage (pre-auth or
+          claim) — anything submitted/ADR-replied/reconsideration, not yet decided.
+          Use for "cases awaiting the insurer".
+
+      # --- Identity / value ---
+      - name: has_claim_number
+        sql: "{CUBE}.claim_number IS NOT NULL"
+        description: Cases that have a claim number assigned.
+
+      - name: has_preauth_approved_amount
+        sql: "{CUBE}.approved_amount > 0"
+        description: Cases with a non-zero PRE-AUTH approved amount.
+
+      # --- Time (on created_at) ---
+      - name: today
+        sql: "{CUBE}.created_at >= date_trunc('day', now())"
+        description: Cases created today.
+      - name: this_month
+        sql: "{CUBE}.created_at >= date_trunc('month', now())"
+        description: Cases created since the start of the current month.
+      - name: this_year
+        sql: "{CUBE}.created_at >= date_trunc('year', now())"
+        description: Cases created since the start of the current year.
+      - name: last_7_days
+        sql: "{CUBE}.created_at >= now() - interval '7 days'"
+        description: Cases created in the last 7 days.
+      - name: last_30_days
+        sql: "{CUBE}.created_at >= now() - interval '30 days'"
+        description: Cases created in the last 30 days.
+
+    measures:
+      - name: count
+        type: count
+        description: Number of cases.
+
+      - name: pre_auth_stage_count
+        type: count
+        filters:
+          - sql: "{CUBE}.current_stage = 'PRE_AUTH'"
+        description: >
+          Number of cases still in the pre-auth stage — i.e. pre-auths NOT yet
+          moved/converted to claims / with no claim raised yet. The inverse of
+          claims.conversion_count. Use THIS for "pre-auths not moved to claims".
+
+      - name: claim_stage_count
+        type: count
+        filters:
+          - sql: "{CUBE}.current_stage = 'CLAIM'"
+        description: Number of cases that reached the claim stage.
+
+      - name: cancelled_count
+        type: count
+        filters:
+          - sql: "{CUBE}.case_status = 'CANCELLED'"
+        description: Number of cancelled cases.
+
+      - name: active_count
+        type: count
+        filters:
+          - sql: "{CUBE}.case_status <> 'CANCELLED'"
+        description: Number of active (non-cancelled) cases.
+
+      - name: total_preauth_approved_amount
+        sql: approved_amount
+        type: sum
+        description: >
+          Total PRE-AUTH approved amount across cases, in INR — the cumulative
+          amount the insurer pre-approved (initial + enhancements). Mirrors
+          pre_auth.preauth_approved_amount; NOT the claim-approved amount.
+
+      - name: avg_preauth_approved_amount
+        sql: approved_amount
+        type: avg
+        description: Average PRE-AUTH approved amount per case, in INR.
+
+      - name: max_preauth_approved_amount
+        sql: approved_amount
+        type: max
+        description: >
+          Highest PRE-AUTH approved amount on any single case, in INR (use for
+          "highest/largest pre-auth approved on a case"). NOT the claim-approved amount.

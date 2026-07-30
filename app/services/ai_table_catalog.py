@@ -103,7 +103,7 @@ TABLE_DOCS: dict = {
             "claim_number": {"d": "Insurer claim/authorization number (denormalised from the case)."},
             "claimed_amount": {"d": "Amount claimed in the claim submission (money)."},
             "approved_amount": {"d": "Claim-stage approved amount (money)."},
-            "status": {"d": "Claim status.", "enum": ["SUBMITTED", "APPROVED", "PARTIALLY_APPROVED", "DENIED"]},
+            "status": {"d": "Claim status, CLAIM_-prefixed.", "enum": ["CLAIM_SUBMITTED", "CLAIM_ADR_SUBMITTED", "CLAIM_RECONSIDER", "CLAIM_ADR_NMI", "CLAIM_APPROVED", "CLAIM_PARTIALLY_APPROVED", "CLAIM_DENIED", "CLAIM_UNKNOWN"]},
             "submitted_at": {"d": "When the claim was submitted."},
             "created_at": {"d": "Claim row creation time."},
         },

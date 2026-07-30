@@ -1,0 +1,178 @@
+# Cube data model for the `patient_personal_detail` table.
+# Ref: https://docs.cube.dev/docs/data-modeling/cubes
+#
+# One row per patient (1:1 with a pre-auth / case): demographics, policy identity,
+# corporate tie-up, other-insurance and family-physician flags. Used as LLM
+# context to answer hospital-admin questions about patients. Links to the case
+# via hospitalization_id. Free-text/PII fields (address, contact numbers,
+# employee id, physician contacts, other-insurance details) exist on the table
+# but are omitted here — they aren't useful for analytics.
+cubes:
+  - name: patient_personal_detail
+    sql_table: public.patient_personal_detail
+    description: >
+      Patient demographic & policy details captured on the pre-auth form — one per
+      case. Covers gender, age, occupation, corporate tie-up, policy identity, and
+      whether the patient has other insurance / a family physician.
+
+    joins:
+      - name: hospitalization
+        sql: "{CUBE}.hospitalization_id = {hospitalization}.id"
+        relationship: many_to_one
+
+    dimensions:
+      - name: id
+        sql: id
+        type: number
+        primary_key: true
+        description: Primary key of the patient-detail row (bigint).
+
+      - name: hospitalization_id
+        sql: hospitalization_id
+        type: string
+        description: FK to hospitalization.id — the case this patient belongs to.
+
+      - name: uhid
+        sql: uhid
+        type: string
+        description: Unique hospital patient identifier.
+
+      - name: patient_name
+        sql: patient_name
+        type: string
+        description: Patient's full name (use for name lookups).
+
+      - name: gender
+        sql: gender
+        type: string
+        description: Patient gender (e.g. Male, Female). May be blank if not captured.
+
+      - name: age_years
+        sql: age_years
+        type: number
+        description: Patient age in years.
+
+      - name: date_of_birth
+        sql: date_of_birth
+        type: time
+        description: Patient date of birth.
+
+      - name: occupation
+        sql: occupation
+        type: string
+        description: Patient occupation.
+
+      - name: corporate_name
+        sql: corporate_name
+        type: string
+        description: Corporate/employer tie-up name (set for corporate policies).
+
+      - name: policy_number
+        sql: policy_number
+        type: string
+        description: Insurance policy number (use for policy lookups).
+
+      - name: insured_card_id
+        sql: insured_card_id
+        type: string
+        description: Insured member/card id.
+
+      - name: has_other_insurance
+        sql: has_other_insurance
+        type: boolean
+        description: Whether the patient has another insurance policy.
+
+      - name: has_family_physician
+        sql: has_family_physician
+        type: boolean
+        description: Whether the patient has a family physician on record.
+
+      - name: created_at
+        sql: created_at
+        type: time
+        description: When the patient detail was captured.
+
+    # Segments = named filters mapping plain admin questions to slices.
+    segments:
+      # --- Gender ---
+      - name: male
+        sql: "{CUBE}.gender = 'Male'"
+        description: Male patients.
+      - name: female
+        sql: "{CUBE}.gender = 'Female'"
+        description: Female patients.
+
+      # --- Age groups ---
+      - name: pediatric
+        sql: "{CUBE}.age_years IS NOT NULL AND {CUBE}.age_years < 18"
+        description: Pediatric patients (under 18).
+      - name: adult
+        sql: "{CUBE}.age_years >= 18 AND {CUBE}.age_years < 60"
+        description: Adult patients (18–59).
+      - name: senior
+        sql: "{CUBE}.age_years >= 60"
+        description: Senior-citizen patients (60 and above).
+
+      # --- Policy / insurance profile ---
+      - name: corporate_patient
+        sql: "{CUBE}.corporate_name IS NOT NULL AND btrim({CUBE}.corporate_name) <> ''"
+        description: Patients under a corporate/employer policy.
+
+      - name: with_other_insurance
+        sql: "{CUBE}.has_other_insurance = true"
+        description: Patients who also hold another insurance policy.
+
+      - name: with_family_physician
+        sql: "{CUBE}.has_family_physician = true"
+        description: Patients with a family physician on record.
+
+      # --- Time (on created_at) ---
+      - name: this_month
+        sql: "{CUBE}.created_at >= date_trunc('month', now())"
+        description: Patients captured since the start of the current month.
+      - name: last_30_days
+        sql: "{CUBE}.created_at >= now() - interval '30 days'"
+        description: Patients captured in the last 30 days.
+
+    measures:
+      - name: count
+        type: count
+        description: Number of patient rows (one per case; NOT de-duplicated).
+
+      - name: unique_patient_count
+        sql: uhid
+        type: count_distinct
+        description: Number of UNIQUE patients (distinct uhid). Use for "how many unique/distinct patients".
+
+      - name: avg_age
+        sql: age_years
+        type: avg
+        description: Average patient age, in years.
+
+      - name: min_age
+        sql: age_years
+        type: min
+        description: Youngest patient age.
+
+      - name: max_age
+        sql: age_years
+        type: max
+        description: Oldest patient age.
+
+      - name: with_other_insurance_count
+        type: count
+        filters:
+          - sql: "{CUBE}.has_other_insurance = true"
+        description: Number of patients who hold another insurance policy.
+
+      - name: with_family_physician_count
+        type: count
+        filters:
+          - sql: "{CUBE}.has_family_physician = true"
+        description: Number of patients with a family physician on record.
+
+      - name: corporate_count
+        type: count
+        filters:
+          - sql: "{CUBE}.corporate_name IS NOT NULL AND btrim({CUBE}.corporate_name) <> ''"
+        description: Number of patients under a corporate policy.

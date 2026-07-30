@@ -478,6 +478,15 @@ CLAIM_OUTCOME_TO_CASE_STATUS = {
 }
 
 
+def claim_status_value(bare: str | None) -> str | None:
+    """The value stored on `claims.status` for a bare claim state — CLAIM_-prefixed
+    so it stays consistent with hospitalization.case_status / claim_status_tracking.
+    Idempotent (won't double-prefix)."""
+    if not bare:
+        return bare
+    return bare if bare.startswith("CLAIM_") else f"CLAIM_{bare}"
+
+
 def update_extracted_data(
     db: Session,
     claim_case_id,
@@ -640,7 +649,7 @@ def update_extracted_data(
                     status_code=status.HTTP_400_BAD_REQUEST,
                     detail="Claim row missing for this claim case",
                 )
-            claim_row.status = applied_status
+            claim_row.status = claim_status_value(applied_status)
             if claim_row.processed_at is None:
                 claim_row.processed_at = datetime.now(timezone.utc)
             if payload.claim_number is not None:

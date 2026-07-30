@@ -1,0 +1,258 @@
+# Cube data model for the `pre_auth` table.
+# One row per pre-authorization form (always the PRE_AUTH stage — claim-stage
+# data lives in other tables). Used here as semantic context for an LLM: it
+# describes the pre-auth table's columns, their meaning, the amounts that can
+# be aggregated, and how it relates to the case (hospitalization) and tenant
+# (hospitals).
+cubes:
+  - name: pre_auth
+    sql_table: public.pre_auth
+    description: >
+      Pre-authorization requests raised to insurers/TPAs before treatment.
+      Each row belongs to one hospitalization case and one hospital. Tracks the
+      pre-auth workflow status and the requested vs. approved amounts.
+
+    joins:
+      - name: hospitalization
+        sql: "{CUBE}.hospitalization_id = {hospitalization}.id"
+        relationship: many_to_one
+      - name: hospitals
+        sql: "{CUBE}.hospital_id = {hospitals}.id"
+        relationship: many_to_one
+
+    dimensions:
+      - name: id
+        sql: id
+        type: number
+        primary_key: true
+        description: Primary key of the pre-auth row (bigint, auto-increment).
+
+      - name: hospitalization_id
+        sql: hospitalization_id
+        type: string
+        description: FK to hospitalization.id — the case this pre-auth belongs to.
+
+      - name: hospital_id
+        sql: hospital_id
+        type: string
+        description: FK to hospitals.id — the tenant hospital (denormalized from the case).
+
+      - name: preauth_status
+        sql: preauth_status
+        type: string
+        description: >
+          Pre-auth workflow status, mirrored from the case (hospitalization.case_status)
+          while at the PRE_AUTH stage then frozen once the claim is raised.
+          Complete set of possible values: DRAFT (not sent yet); SUBMITTED,
+          ENHANCE_SUBMITTED, ADR_SUBMITTED, RECONSIDER (awaiting the insurer);
+          ADR_NMI (insurer raised a query / needs more info); APPROVED,
+          PARTIALLY_APPROVED, ENHANCEMENT_APPROVED (approvals); DENIED,
+          ENHANCEMENT_DENIED (rejections); CANCELLED; and UNKNOWN (fallback
+          when an outcome could not be classified).
+
+      - name: created_at
+        sql: created_at
+        type: time
+        description: >
+          When the pre-auth was created — the PRIMARY event time. Use this as the
+          query's timeDimension for any time-range or trend question: pass a
+          dateRange (e.g. "this month", "last 7 days", "last 30 days", "year to
+          date", or an explicit [from, to]) and a granularity (day/week/month/
+          quarter/year) to bucket results over time.
+
+      - name: updated_at
+        sql: updated_at
+        type: time
+        description: >
+          When the pre-auth was last updated (e.g. last status change). Use as the
+          timeDimension when the question is about recent activity/changes rather
+          than when the request was first created.
+
+    # Segments = named, reusable filters. They let an LLM/query map a plain
+    # question ("how many pending pre-auths?") to a predefined slice.
+    segments:
+      # --- Status: not-yet-sent ---------------------------------------------
+      - name: draft
+        sql: "{CUBE}.preauth_status = 'DRAFT'"
+        description: Unfinished pre-auths, not yet submitted to the insurer.
+
+      # --- Status: awaiting the insurer (in-flight) -------------------------
+      - name: submitted
+        sql: "{CUBE}.preauth_status = 'SUBMITTED'"
+        description: Initial pre-auth requests submitted to the insurer/TPA.
+
+      - name: enhancement_submitted
+        sql: "{CUBE}.preauth_status = 'ENHANCE_SUBMITTED'"
+        description: Enhancement (additional-amount) requests submitted, awaiting decision.
+
+      - name: adr_submitted
+        sql: "{CUBE}.preauth_status = 'ADR_SUBMITTED'"
+        description: >
+          ADR reply submitted — the hospital has responded to the insurer's
+          additional-document / more-info request and is awaiting a decision.
+
+      - name: reconsideration
+        sql: "{CUBE}.preauth_status = 'RECONSIDER'"
+        description: Pre-auths in the reconsideration flow after a denial.
+
+      - name: awaiting_insurer
+        sql: "{CUBE}.preauth_status IN ('SUBMITTED', 'ENHANCE_SUBMITTED', 'ADR_SUBMITTED', 'RECONSIDER')"
+        description: >
+          Awaiting the insurer's response — anything submitted (initial,
+          enhancement, ADR reply, or reconsideration) but not yet decided. Also
+          matches "pending".
+
+      # --- Status: action needed by the hospital ----------------------------
+      - name: adr_query
+        sql: "{CUBE}.preauth_status = 'ADR_NMI'"
+        description: >
+          Insurer raised an ADR / query (Need More Information) — the hospital
+          must supply additional documents/details before it can proceed.
+
+      - name: action_needed
+        sql: "{CUBE}.preauth_status IN ('ADR_NMI', 'DENIED', 'ENHANCEMENT_DENIED')"
+        description: Needs hospital action — an open query or a rejection to respond to.
+
+      # --- Approval degree (amount-based) -----------------------------------
+      - name: fully_approved
+        sql: "{CUBE}.preauth_approved_amount IS NOT NULL AND {CUBE}.preauth_raised_amount IS NOT NULL AND {CUBE}.preauth_approved_amount >= {CUBE}.preauth_raised_amount"
+        description: Approved amount covers the full requested amount (approved >= raised).
+
+      - name: partially_approved
+        sql: "{CUBE}.preauth_approved_amount > 0 AND {CUBE}.preauth_raised_amount IS NOT NULL AND {CUBE}.preauth_approved_amount < {CUBE}.preauth_raised_amount"
+        description: Approved for some money but less than requested (0 < approved < raised).
+
+      - name: approved_any
+        sql: "{CUBE}.preauth_approved_amount IS NOT NULL AND {CUBE}.preauth_approved_amount > 0"
+        description: Any form of approval — a non-zero approved amount on record, regardless of status.
+
+      - name: awaiting_approval_amount
+        sql: "{CUBE}.preauth_approved_amount IS NULL"
+        description: No approved amount recorded yet.
+
+      # --- Status marker: enhancement approval (amount can't distinguish) ----
+      - name: enhancement_approved
+        sql: "{CUBE}.preauth_status = 'ENHANCEMENT_APPROVED'"
+        description: Enhancement (top-up) requests that were approved — a workflow marker.
+
+      # --- Status: rejections & closure -------------------------------------
+      - name: denied
+        sql: "{CUBE}.preauth_status IN ('DENIED', 'ENHANCEMENT_DENIED')"
+        description: Rejected pre-auths (initial denial or enhancement denial).
+
+      - name: cancelled
+        sql: "{CUBE}.preauth_status = 'CANCELLED'"
+        description: Cancelled pre-auths.
+
+      - name: has_enhancement
+        sql: "{CUBE}.preauth_status IN ('ENHANCE_SUBMITTED', 'ENHANCEMENT_APPROVED', 'ENHANCEMENT_DENIED')"
+        description: Cases that went through the enhancement flow (submitted, approved, or denied).
+
+      - name: has_adr
+        sql: "{CUBE}.preauth_status IN ('ADR_NMI', 'ADR_SUBMITTED')"
+        description: Cases that involved an ADR / additional-information request.
+
+      # --- Value -------------------------------------------------------------
+      - name: high_value
+        sql: "{CUBE}.preauth_raised_amount >= 100000"
+        description: Big-ticket pre-auths (requested amount >= INR 1,00,000).
+
+      # --- Time-based (relative, on created_at) -----------------------------
+      # Convenience shortcuts for common relative ranges. For arbitrary/explicit
+      # ranges, prefer the created_at timeDimension with a dateRange instead.
+      - name: today
+        sql: "{CUBE}.created_at >= date_trunc('day', now())"
+        description: Pre-auths created today.
+
+      - name: this_week
+        sql: "{CUBE}.created_at >= date_trunc('week', now())"
+        description: Pre-auths created since the start of the current week (Mon).
+
+      - name: this_month
+        sql: "{CUBE}.created_at >= date_trunc('month', now())"
+        description: Pre-auths created since the start of the current month.
+
+      - name: this_year
+        sql: "{CUBE}.created_at >= date_trunc('year', now())"
+        description: Pre-auths created since the start of the current year (year to date).
+
+      - name: last_7_days
+        sql: "{CUBE}.created_at >= now() - interval '7 days'"
+        description: Pre-auths created in the last 7 days.
+
+      - name: last_30_days
+        sql: "{CUBE}.created_at >= now() - interval '30 days'"
+        description: Pre-auths created in the last 30 days.
+
+      - name: last_90_days
+        sql: "{CUBE}.created_at >= now() - interval '90 days'"
+        description: Pre-auths created in the last 90 days.
+
+    measures:
+      - name: count
+        type: count
+        description: Number of pre-auth requests.
+
+      - name: total_shortfall_amount
+        sql: "({CUBE}.preauth_raised_amount - {CUBE}.preauth_approved_amount)"
+        type: sum
+        filters:
+          - sql: "{CUBE}.preauth_approved_amount IS NOT NULL AND {CUBE}.preauth_raised_amount > {CUBE}.preauth_approved_amount"
+        description: Total unapproved gap (raised minus approved) across shortfall pre-auths, in INR.
+
+      - name: approved_count
+        type: count
+        filters:
+          - sql: "{CUBE}.preauth_approved_amount IS NOT NULL AND {CUBE}.preauth_approved_amount > 0"
+        description: >
+          Number of pre-auths that have a non-zero approved amount on record
+          (i.e. actually approved for some money, regardless of the current
+          workflow status).
+
+      - name: pending_count
+        type: count
+        filters:
+          - sql: "{CUBE}.preauth_status IN ('SUBMITTED', 'ENHANCE_SUBMITTED', 'ADR_SUBMITTED', 'RECONSIDER')"
+        description: Number of pre-auths awaiting an insurer decision.
+
+      - name: denied_count
+        type: count
+        filters:
+          - sql: "{CUBE}.preauth_status IN ('DENIED', 'ENHANCEMENT_DENIED')"
+        description: Number of denied pre-auth requests.
+
+      - name: action_needed_count
+        type: count
+        filters:
+          - sql: "{CUBE}.preauth_status IN ('ADR_NMI', 'DENIED', 'ENHANCEMENT_DENIED')"
+        description: Number of pre-auths needing hospital action (open query or rejection).
+
+      - name: total_raised_amount
+        sql: preauth_raised_amount
+        type: sum
+        description: Total requested (raised) pre-auth amount, in INR.
+
+      - name: total_approved_amount
+        sql: preauth_approved_amount
+        type: sum
+        description: Total approved pre-auth amount, in INR.
+
+      - name: avg_raised_amount
+        sql: preauth_raised_amount
+        type: avg
+        description: Average requested pre-auth amount per request, in INR.
+
+      - name: avg_approved_amount
+        sql: preauth_approved_amount
+        type: avg
+        description: Average approved pre-auth amount per request, in INR.
+
+      - name: max_raised_amount
+        sql: preauth_raised_amount
+        type: max
+        description: Highest single requested (raised) pre-auth amount, in INR.
+
+      - name: max_approved_amount
+        sql: preauth_approved_amount
+        type: max
+        description: Highest single approved pre-auth amount, in INR.

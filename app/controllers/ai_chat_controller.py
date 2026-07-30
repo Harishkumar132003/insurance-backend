@@ -15,7 +15,11 @@ from app.schemas.ai_query import (
     AiChatListItem,
     AiChatMessageResponse,
 )
-from app.services import ai_query_service
+# NL -> Cube SQL pipeline (classify -> concepts -> vector retrieval -> Cube SQL).
+# Same answer_question/astream_answer contract as before, so chat/auth/streaming
+# are unchanged. The old intent/table-selection engine (intent_service) is kept
+# for reference but no longer wired here.
+from app.services import nl_sql_service as ai_query_service
 
 logger = logging.getLogger(__name__)
 

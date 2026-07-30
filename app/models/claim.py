@@ -18,7 +18,10 @@ class Claim(Base):
     claim_number = Column(String, nullable=True)
     claimed_amount = Column(Numeric(12, 2), nullable=False)
     approved_amount = Column(Numeric(12, 2), nullable=True)
-    status = Column(String, nullable=False, default="SUBMITTED")
+    # CLAIM_-prefixed, consistent with hospitalization.case_status /
+    # claim_status_tracking (claims is claim-stage only). Set to prefixed values
+    # by the controllers; default is the initial submitted state.
+    status = Column(String, nullable=False, default="CLAIM_SUBMITTED")
     submitted_at = Column(DateTime(timezone=True), server_default=func.now())
     processed_at = Column(DateTime(timezone=True), nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())

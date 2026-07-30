@@ -35,6 +35,7 @@ from app.routes.events_routes import router as events_router
 from app.routes.invoice_routes import router as invoice_router
 from app.routes.dashboard_routes import router as dashboard_router
 from app.routes.ai_query_routes import router as ai_query_router
+from app.routes.intent_routes import router as intent_router
 from app.routes.settlement_routes import router as settlement_router
 from app.services.event_hub import event_hub
 from app.models.summary_prompt_template import SummaryPromptTemplate
@@ -226,6 +227,7 @@ app.include_router(events_router, prefix="/api/v1")
 app.include_router(invoice_router, prefix="/api/v1")
 app.include_router(dashboard_router, prefix="/api/v1")
 app.include_router(ai_query_router, prefix="/api/v1")
+app.include_router(intent_router, prefix="/api/v1")
 app.include_router(settlement_router, prefix="/api/v1")
 
 

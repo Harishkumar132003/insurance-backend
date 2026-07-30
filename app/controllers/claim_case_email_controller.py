@@ -412,6 +412,7 @@ def validate_email_suggestion(
             STATUS_TO_EMAIL_TYPE,
             CLAIM_STATUS_TO_EMAIL_TYPE,
             CLAIM_OUTCOME_TO_CASE_STATUS,
+            claim_status_value,
         )
 
         is_claim_stage = claim_case.current_stage == "CLAIM"
@@ -447,7 +448,7 @@ def validate_email_suggestion(
             if applied_status in CLAIM_STATUS_TO_EMAIL_TYPE:
                 email.email_type = CLAIM_STATUS_TO_EMAIL_TYPE[applied_status]
 
-            claim_row.status = applied_status
+            claim_row.status = claim_status_value(applied_status)
             if (
                 applied_status in ("APPROVED", "PARTIALLY_APPROVED")
                 and email.ai_suggested_amount is not None
@@ -629,6 +630,7 @@ def process_by_provider(
         CLAIM_STATUS_TO_EMAIL_TYPE,
         CLAIM_OUTCOME_TO_CASE_STATUS,
         coerce_outcome_for_prior_approval,
+        claim_status_value,
     )
     from app.models.claim import Claim
 
@@ -685,7 +687,7 @@ def process_by_provider(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="No claim has been raised on this case",
             )
-        claim.status = new_status
+        claim.status = claim_status_value(new_status)
         if new_status in ("APPROVED", "PARTIALLY_APPROVED") and approved_amount is not None:
             claim.approved_amount = float(approved_amount)
         if new_status in ("APPROVED", "PARTIALLY_APPROVED", "DENIED"):

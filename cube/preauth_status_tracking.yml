@@ -1,0 +1,159 @@
+# Cube data model for the `preauth_status_tracking` table.
+# Ref: https://docs.cube.dev/docs/data-modeling/cubes
+#
+# Status-transition LOG for the PRE-AUTH stage: one row per status change on a
+# case, with the turn-around time (TAT) between the previous and this status,
+# documents shared and a remark. MANY rows per case — use for TAT / timeline /
+# transition questions, NOT for counting cases (that would fan out). Statuses are
+# bare (SUBMITTED, APPROVED, ADR_NMI, ...) like pre_auth.preauth_status.
+cubes:
+  - name: preauth_status_tracking
+    sql_table: public.preauth_status_tracking
+    description: >
+      Pre-auth status-change log with turn-around time (insurer/hospital response
+      time) per transition. Use for "how long did X take", timelines, and counts
+      of transitions (e.g. how many ADR queries were raised).
+
+    joins:
+      - name: hospitalization
+        sql: "{CUBE}.hospitalization_id = {hospitalization}.id"
+        relationship: many_to_one
+      - name: hospitals
+        sql: "{CUBE}.hospital_id = {hospitals}.id"
+        relationship: many_to_one
+
+    dimensions:
+      - name: id
+        sql: id
+        type: number
+        primary_key: true
+        description: Primary key of the transition row (bigint).
+
+      - name: hospitalization_id
+        sql: hospitalization_id
+        type: string
+        description: FK to hospitalization.id — the case this transition belongs to.
+
+      - name: hospital_id
+        sql: hospital_id
+        type: string
+        description: FK to hospitals.id — the tenant hospital.
+
+      - name: uhid
+        sql: uhid
+        type: string
+        description: Unique hospital patient identifier.
+
+      - name: from_status
+        sql: from_status
+        type: string
+        description: Status before the change (NULL for the first transition).
+
+      - name: to_status
+        sql: to_status
+        type: string
+        description: >
+          Status after the change (bare, pre-auth vocabulary): SUBMITTED,
+          ENHANCE_SUBMITTED, ADR_SUBMITTED, RECONSIDER, ADR_NMI, APPROVED,
+          PARTIALLY_APPROVED, ENHANCEMENT_APPROVED, DENIED, ENHANCEMENT_DENIED,
+          CANCELLED, UNKNOWN.
+
+      - name: turnaround_text
+        sql: turn_around_time_text
+        type: string
+        description: Human-readable turn-around time for this transition (e.g. "1 day 2 min").
+
+      - name: remark
+        sql: remark
+        type: string
+        description: Free-text remark captured with the transition (e.g. insurer note).
+
+      - name: created_at
+        sql: created_at
+        type: time
+        description: When the transition was recorded — the primary event time.
+
+    # Segments = named filters for common transition questions.
+    segments:
+      # --- Transition outcome (to_status) ---
+      - name: to_approved
+        sql: "{CUBE}.to_status IN ('APPROVED', 'PARTIALLY_APPROVED', 'ENHANCEMENT_APPROVED')"
+        description: Transitions INTO an approval (full, partial, or enhancement).
+      - name: to_denied
+        sql: "{CUBE}.to_status IN ('DENIED', 'ENHANCEMENT_DENIED')"
+        description: Transitions into a denial.
+      - name: to_submitted
+        sql: "{CUBE}.to_status = 'SUBMITTED'"
+        description: Initial submission transitions.
+      - name: to_query
+        sql: "{CUBE}.to_status = 'ADR_NMI'"
+        description: Transitions where the insurer raised an ADR / query.
+      - name: to_adr_response
+        sql: "{CUBE}.to_status = 'ADR_SUBMITTED'"
+        description: Transitions where the hospital replied to an ADR.
+      - name: to_enhancement
+        sql: "{CUBE}.to_status = 'ENHANCE_SUBMITTED'"
+        description: Transitions where an enhancement was submitted.
+
+      # --- Content flags ---
+      - name: has_documents
+        sql: "{CUBE}.document_link IS NOT NULL"
+        description: Transitions that shared one or more documents.
+      - name: has_remark
+        sql: "{CUBE}.remark IS NOT NULL AND btrim({CUBE}.remark) <> ''"
+        description: Transitions that carry a remark.
+      - name: has_turnaround
+        sql: "{CUBE}.turn_around_time IS NOT NULL"
+        description: Transitions with a recorded turn-around time.
+
+      # --- Time (on created_at) ---
+      - name: this_month
+        sql: "{CUBE}.created_at >= date_trunc('month', now())"
+        description: Transitions recorded since the start of the current month.
+      - name: last_30_days
+        sql: "{CUBE}.created_at >= now() - interval '30 days'"
+        description: Transitions recorded in the last 30 days.
+
+    measures:
+      - name: count
+        type: count
+        description: Number of status transitions (NOT number of cases).
+
+      - name: avg_turnaround_hours
+        sql: "EXTRACT(EPOCH FROM {CUBE}.turn_around_time) / 3600.0"
+        type: avg
+        description: Average turn-around time per transition, in hours.
+
+      - name: avg_turnaround_days
+        sql: "EXTRACT(EPOCH FROM {CUBE}.turn_around_time) / 86400.0"
+        type: avg
+        description: Average turn-around time per transition, in days.
+
+      - name: max_turnaround_hours
+        sql: "EXTRACT(EPOCH FROM {CUBE}.turn_around_time) / 3600.0"
+        type: max
+        description: Longest turn-around time, in hours.
+
+      - name: min_turnaround_hours
+        sql: "EXTRACT(EPOCH FROM {CUBE}.turn_around_time) / 3600.0"
+        type: min
+        description: Shortest turn-around time, in hours.
+
+      - name: query_count
+        type: count
+        filters:
+          - sql: "{CUBE}.to_status = 'ADR_NMI'"
+        description: Number of ADR/queries the insurer raised.
+
+      - name: approved_pre_auth_last_month
+        type: count_distinct
+        sql: hospitalization_id
+        filters:
+          - sql: "{CUBE}.to_status IN ('APPROVED', 'PARTIALLY_APPROVED', 'ENHANCEMENT_APPROVED')"
+          - sql: "{CUBE}.created_at >= date_trunc('month', now() - interval '1 month') AND {CUBE}.created_at < date_trunc('month', now())"
+        description: >
+          Distinct pre-auths APPROVED last calendar month — i.e. that transitioned
+          INTO an approval (APPROVED, PARTIALLY_APPROVED or ENHANCEMENT_APPROVED)
+          whose transition was recorded in the PREVIOUS calendar month. "Last month"
+          is fixed here, so NO extra time filter is needed. Counts by WHEN the
+          approval happened, not when the pre-auth was created.

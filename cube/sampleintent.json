@@ -1,0 +1,57 @@
+{
+  "_about": "Documentation for the MINIMAL intent object returned by POST /api/v1/ai/intent (inside the response's `intent` field). The intent deliberately carries ONLY the target table(s) and the action — nothing that could be guessed inaccurately. All query details (measures, dimensions, segments, filters, time, order, limit) are chosen downstream by the Cube query generator from the live /meta. This file is documentation only; app/schemas/intent.py is the source of truth.",
+
+  "_key_catalog": {
+    "query": "string — the original user question, echoed back verbatim.",
+    "table": "enum|null — primary target table. One of: pre_auth | claims | hospitalization | hospitals. null if not determinable.",
+    "related_tables": "string[] — every OTHER table needed via joins (e.g. hospitals when the ask is 'by hospital'). Empty array if none.",
+    "action": "enum|null — what the user wants: count | sum | avg | min | max | list | trend | ranking | lookup. null if not determinable.",
+    "answerable": "boolean — false when the question can't be served by these tables (table/action left null)."
+  },
+
+  "sample": {
+    "query": "total approved claim amount by hospital last 30 days",
+    "table": "claims",
+    "related_tables": ["hospitals"],
+    "action": "sum",
+    "answerable": true
+  },
+
+  "examples": [
+    {
+      "query": "how many pending pre-auths?",
+      "table": "pre_auth",
+      "related_tables": [],
+      "action": "count",
+      "answerable": true
+    },
+    {
+      "query": "list denied claims with claim numbers",
+      "table": "claims",
+      "related_tables": [],
+      "action": "list",
+      "answerable": true
+    },
+    {
+      "query": "top 5 hospitals by total claimed amount",
+      "table": "claims",
+      "related_tables": ["hospitals"],
+      "action": "ranking",
+      "answerable": true
+    },
+    {
+      "query": "monthly trend of pre-auth submissions this year",
+      "table": "pre_auth",
+      "related_tables": [],
+      "action": "trend",
+      "answerable": true
+    },
+    {
+      "query": "show me the weather forecast for tomorrow",
+      "table": null,
+      "related_tables": [],
+      "action": null,
+      "answerable": false
+    }
+  ]
+}

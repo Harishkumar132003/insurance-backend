@@ -20,6 +20,7 @@ from app.controllers.claim_case_controller import (
     CLAIM_QUERY_RAISE_STATE,
     CLAIM_REPLY_TO_CLAIM_STATUS,
     CLAIM_REPLY_EMAIL_TYPE,
+    claim_status_value,
 )
 from app.models.claim import Claim
 from app.services.email_service import send_email, fetch_inbox
@@ -372,7 +373,7 @@ def send_query_email(
                 detail="No claim has been raised on this case",
             )
         # Update the Claim row's own state to match the new in-stage workflow.
-        claim_row.status = CLAIM_REPLY_TO_CLAIM_STATUS[next_state]
+        claim_row.status = claim_status_value(CLAIM_REPLY_TO_CLAIM_STATUS[next_state])
     else:
         # Pre-auth: APPROVED / PARTIALLY_APPROVED -> ENHANCE_SUBMITTED,
         #          DENIED -> RECONSIDER, ADR_NMI -> ADR_SUBMITTED.
