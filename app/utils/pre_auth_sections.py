@@ -27,10 +27,12 @@ _PATIENT_DATE_FIELDS = {"date_of_birth"}
 _PATIENT_INT_FIELDS = {"age_years"}
 _PATIENT_BOOL_FIELDS = {"has_other_insurance", "has_family_physician"}
 
+# Scalar fields, written with a bare setattr. `drug_route` is deliberately NOT
+# here — it's a JSONB array and gets normalised separately.
 _TREATMENT_FLAT = [
-    "doctor_name", "provisional_diagnosis", "icd10_code", "surgery_name",
-    "surgery_icd_code", "drug_route", "injury_cause", "past_history",
-    "duration_days", "other_treatment", "critical_findings", "treatment_details",
+    "doctor_name", "provisional_diagnosis", "icd10_code",
+    "surgery_icd_code", "injury_cause", "past_history",
+    "duration_days", "critical_findings", "treatment_details",
     "illness_description", "first_consultation_date",
 ]
 _TREATMENT_DATE_FIELDS = {"first_consultation_date"}
@@ -101,6 +103,79 @@ def _num(v):
         return None
 
 
+_INVESTIGATION_KEYS = (
+    "investigation_category", "investigation_name", "investigation_description",
+)
+
+
+def _clean_str_list(raw) -> list[str]:
+    """Normalise a multi-value code field to a de-duplicated list of non-empty
+    strings, order preserved. A bare string becomes a one-element list, so a
+    legacy payload — or a provider API that still sends a scalar — round-trips
+    instead of blowing up on the JSONB column."""
+    if isinstance(raw, str):
+        raw = [raw]
+    if not isinstance(raw, list):
+        return []
+    out: list[str] = []
+    for item in raw:
+        if item is None:
+            continue
+        value = str(item).strip()
+        if value and value not in out:
+            out.append(value)
+    return out
+
+
+_TREATMENT_ENTRY_KEYS = (
+    "treatment_details", "drug_route", "surgery_icd_code", "injury_cause",
+)
+
+
+def _clean_treatments(raw) -> list[dict]:
+    """Normalise the repeatable Treatments array to a known shape, order
+    preserved, dropping entries that carry no values. `drug_route` is a
+    multi-select, so it goes through the same list normaliser as the section-level
+    one — which also copes with a legacy payload sending a bare string."""
+    if not isinstance(raw, list):
+        return []
+    out: list[dict] = []
+    for item in raw:
+        if not isinstance(item, dict):
+            continue
+        entry = {}
+        for key in _TREATMENT_ENTRY_KEYS:
+            if key == "drug_route":
+                entry[key] = _clean_str_list(item.get(key))
+                continue
+            value = item.get(key)
+            entry[key] = value if value not in ("",) else None
+        # An entry holding nothing but an empty route list is a blank card.
+        if any(entry[k] for k in _TREATMENT_ENTRY_KEYS):
+            out.append(entry)
+    return out
+
+
+def _clean_investigations(raw) -> list[dict]:
+    """Normalise the investigations array to a list of three-key dicts, order
+    preserved, dropping anything that isn't a dict or carries no values. Keeps the
+    JSONB column to a known shape rather than whatever the client posted."""
+    if not isinstance(raw, list):
+        return []
+    out: list[dict] = []
+    for item in raw:
+        if not isinstance(item, dict):
+            continue
+        cleaned = {
+            k: (item.get(k) if item.get(k) not in ("",) else None)
+            for k in _INVESTIGATION_KEYS
+        }
+        if all(v is None for v in cleaned.values()):
+            continue
+        out.append(cleaned)
+    return out
+
+
 # ── Write: nested sections → typed columns ─────────────────────────
 
 def apply_sections(db: Session, form_data: FormData, sections: dict) -> None:
@@ -149,6 +224,19 @@ def apply_sections(db: Session, form_data: FormData, sections: dict) -> None:
             for col, (key, kind) in _ACCIDENT.items():
                 if key in acc:
                     setattr(row, col, _to_bool(acc.get(key)) if kind is bool else acc.get(key))
+        # Multi-value route codes — a JSONB array, so it can't go through the
+        # scalar _TREATMENT_FLAT loop.
+        if "drug_route" in td:
+            row.drug_route = _clean_str_list(td.get("drug_route"))
+        # The repeatable Treatments array. The scalar columns above keep entry
+        # #1's mirror for the print/email; this is what the form reloads from.
+        if "treatments" in td:
+            row.treatments = _clean_treatments(td.get("treatments"))
+        # Investigations: the whole ordered list is replaced on each save. Only
+        # touched when the key is present, so a partial update that omits
+        # `investigations` leaves the stored list alone.
+        if "investigations" in td:
+            row.investigations = _clean_investigations(td.get("investigations"))
         if form_data.treatment is None:
             db.add(row)
             form_data.treatment = row
@@ -229,13 +317,11 @@ def compose_sections(form_data: FormData) -> dict:
             "doctor_name": t.doctor_name,
             "provisional_diagnosis": t.provisional_diagnosis,
             "icd10_code": t.icd10_code,
-            "surgery_name": t.surgery_name,
             "surgery_icd_code": t.surgery_icd_code,
-            "drug_route": t.drug_route,
+            "drug_route": t.drug_route or [],
             "injury_cause": t.injury_cause,
             "past_history": t.past_history,
             "duration_days": t.duration_days,
-            "other_treatment": t.other_treatment,
             "critical_findings": t.critical_findings,
             "treatment_details": t.treatment_details,
             "illness_description": t.illness_description,
@@ -253,6 +339,10 @@ def compose_sections(form_data: FormData) -> dict:
                 "reported_to_police": t.ad_reported_to_police,
                 "test_conducted": t.ad_test_conducted,
             },
+            # Both arrays are already keyed with the form's own field names, so
+            # they round-trip straight back into the repeatable UI.
+            "treatments": t.treatments or [],
+            "investigations": t.investigations or [],
         }
 
     h = form_data.hospitalization

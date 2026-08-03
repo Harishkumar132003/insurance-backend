@@ -8,7 +8,7 @@ from app.models.hospital_provider_mapping import HospitalProviderMapping
 from app.models.policy_provider_config import PolicyProviderConfig
 from app.schemas.hospital_provider import HospitalProviderUpdate
 from app.services.mou_extraction_service import extract_mou_data
-from app.utils.file_storage import save_mou
+from app.utils.file_storage import delete_file, save_mou
 
 
 def extract_mou(file_bytes: bytes, file_name: str | None, content_type: str | None) -> dict:
@@ -127,6 +127,7 @@ def create_mapping(
     mou_filename: str | None,
     mou_content_type: str | None,
     existing_provider_id=None,
+    extracted_data: dict | None = None,
 ) -> dict:
     if existing_provider_id:
         provider = (
@@ -191,7 +192,10 @@ def create_mapping(
         hospital_id=hospital_id,
         policy_provider_id=provider.id,
         room_charges=room_charges,
-        extracted_data=room_charges,
+        # The raw AI extraction as the form received it, NOT a copy of the
+        # admin-edited charges — so the column means the same thing here as it
+        # does on the MOU-replace path. None when no MOU was extracted.
+        extracted_data=extracted_data,
     )
     if mou_bytes and mou_filename:
         stored_filename, file_path = save_mou(hospital_id, mou_bytes, mou_filename)
@@ -234,6 +238,54 @@ def update_mapping(db: Session, hospital_id, mapping_id, payload: HospitalProvid
     db.refresh(mapping)
     db.refresh(provider)
     return _serialize(mapping, provider)
+
+
+def replace_mou(
+    db: Session,
+    hospital_id,
+    mapping_id,
+    file_bytes: bytes,
+    file_name: str | None,
+    content_type: str | None,
+) -> dict:
+    """Attach or replace this mapping's MOU and re-run the tariff extraction.
+
+    Deliberately does NOT touch `room_charges`: the extracted values are returned
+    for the admin to review, and only the follow-up update commits them. So a
+    re-upload can never corrupt the live tariffs on its own.
+    """
+    mapping = _get_mapping(db, hospital_id, mapping_id)
+    if not file_bytes:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail="Uploaded MOU file is empty"
+        )
+    provider = (
+        db.query(PolicyProviderConfig)
+        .filter(PolicyProviderConfig.id == mapping.policy_provider_id)
+        .first()
+    )
+
+    extracted = extract_mou_data(file_bytes, file_name, content_type)
+
+    old_path = mapping.mou_file_path
+    stored_filename, file_path = save_mou(hospital_id, file_bytes, file_name or "mou.pdf")
+    mapping.mou_original_filename = file_name
+    mapping.mou_stored_filename = stored_filename
+    mapping.mou_file_path = file_path
+    mapping.mou_content_type = content_type
+    # The raw AI payload, kept for audit / re-edit (what this column is for).
+    mapping.extracted_data = extracted
+    flag_modified(mapping, "extracted_data")
+
+    db.commit()
+    db.refresh(mapping)
+
+    # Only after the commit succeeds — otherwise a rollback would leave the row
+    # pointing at a file we had already deleted.
+    if old_path and old_path != file_path:
+        delete_file(old_path)
+
+    return {"mapping": _serialize(mapping, provider), "extracted": extracted}
 
 
 def get_mapping_for_mou(db: Session, hospital_id, mapping_id) -> HospitalProviderMapping:

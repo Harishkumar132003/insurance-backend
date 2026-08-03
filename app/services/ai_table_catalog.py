@@ -92,7 +92,7 @@ TABLE_DOCS: dict = {
             "doctor_name": {"d": "Treating doctor."},
             "provisional_diagnosis": {"d": "Provisional diagnosis text."},
             "icd10_code": {"d": "ICD-10 diagnosis code."},
-            "surgery_name": {"d": "Planned surgery/procedure."},
+            "surgery_icd_code": {"d": "ICD-10-PCS code for the planned surgery/procedure."},
         },
     },
     "claims": {

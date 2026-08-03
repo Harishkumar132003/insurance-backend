@@ -9,7 +9,7 @@ from app.controllers import ai_query_controller, ai_chat_controller
 from app.core.deps import require_hospital_admin
 from app.db.session import get_db
 from app.models.user import User
-from app.services import ai_query_service
+from app.services import ai_query_service, icd_suggestion_service
 from app.schemas.ai_query import (
     AiChatDetailResponse,
     AiChatListItem,
@@ -18,6 +18,7 @@ from app.schemas.ai_query import (
     AiQueryRequest,
     AiQueryResponse,
 )
+from app.schemas.icd_suggestion import IcdSuggestionRequest, IcdSuggestionResponse
 
 router = APIRouter(prefix="/ai", tags=["AI Assistant"])
 
@@ -45,6 +46,27 @@ async def ai_query(
     """One-shot question (no persistence). Kept for compatibility; the chat
     endpoints below are what the UI uses."""
     return await ai_query_controller.ask(current_user, payload)
+
+
+@router.post("/suggest-icd", response_model=IcdSuggestionResponse)
+async def suggest_icd(
+    payload: IcdSuggestionRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_hospital_admin),
+):
+    """Suggest ICD-10-PCS procedure codes for one pre-auth treatment row.
+    Nothing is saved — the form shows the candidates and the user picks one."""
+    # Drop blanks so an all-empty request 400s instead of paying for a
+    # hallucination. `[]` needs listing explicitly — a multi-select field posts an
+    # empty list, which is not equal to None or "".
+    context = {k: v for k, v in payload.model_dump().items() if v not in (None, "", [])}
+    if not context:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Provide at least one clinical detail before requesting ICD suggestions.",
+        )
+    suggestions = await icd_suggestion_service.suggest_icd_codes(db, context)
+    return {"suggestions": suggestions}
 
 
 @router.post("/query/stream")

@@ -9,6 +9,7 @@ from app.schemas.form_data import FormDataCreate, FormDataUpdate
 from app.schemas.claim_case import ClaimCaseSubmitForm
 from app.utils.file_storage import save_document
 from app.utils.pre_auth_sections import apply_sections
+from app.controllers import case_sheet_controller
 
 
 def create_form_data(db: Session, payload: FormDataCreate) -> FormData:
@@ -72,6 +73,7 @@ def create_claim_and_form_data(
     payload: ClaimCaseSubmitForm,
     hospital_id=None,
     files: list[UploadFile] | None = None,
+    case_sheet_id=None,
 ) -> dict:
     # 1. Create ClaimCase with DRAFT status
     claim_case = ClaimCase(
@@ -114,6 +116,10 @@ def create_claim_and_form_data(
             content_type=file.content_type,
             file_size=len(file_bytes),
         ))
+
+    # 5. If this form was pre-filled from a case sheet, attach that extraction to
+    #    the case it produced. Best-effort — never fail an otherwise good submit.
+    case_sheet_controller.link_to_claim_case(db, hospital_id, case_sheet_id, claim_case.id)
 
     db.commit()
     db.refresh(claim_case)
