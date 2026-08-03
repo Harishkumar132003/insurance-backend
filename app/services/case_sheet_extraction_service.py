@@ -402,13 +402,13 @@ def _image_url(image: tuple[bytes, str] | str) -> str:
     return f"data:{mime};base64,{base64.b64encode(data_bytes).decode()}"
 
 
-def _extract_page(client: OpenAI, text: str | None, image: tuple[bytes, str] | str | None) -> dict | None:
-    """One page — either PDF text or a single photo. Returns the raw parsed object,
-    or None if the call failed (one bad page shouldn't lose the others)."""
-    prompt = _PROMPT.format(
-        text=text or "(no text layer — read the attached page image instead)",
-        max_source=_MAX_SOURCE_CHARS,
-    )
+def _is_unfetchable_url(e: Exception) -> bool:
+    """Whether the model failed because it could not download the image link —
+    timeout, DNS, TLS, 404. All surface as `invalid_image_url`."""
+    return getattr(e, "code", None) == "invalid_image_url" or "invalid_image_url" in str(e)
+
+
+def _call_page(client: OpenAI, prompt: str, image: tuple[bytes, str] | str | None) -> dict:
     content: list | str = prompt
     if image is not None:
         content = [
@@ -417,21 +417,51 @@ def _extract_page(client: OpenAI, text: str | None, image: tuple[bytes, str] | s
             {"type": "image_url",
              "image_url": {"url": _image_url(image), "detail": "high"}},
         ]
-    try:
-        response = client.chat.completions.create(
-            model="gpt-4o-mini",
-            messages=[{"role": "user", "content": content}],
-            response_format={"type": "json_schema", "json_schema": _schema()},
-            temperature=0,
+    response = client.chat.completions.create(
+        model="gpt-4o-mini",
+        messages=[{"role": "user", "content": content}],
+        response_format={"type": "json_schema", "json_schema": _schema()},
+        temperature=0,
+    )
+    if response.usage:
+        logger.info(
+            "Case sheet page extracted (%s): %s prompt tokens",
+            "image" if image else "text", response.usage.prompt_tokens,
         )
-        if response.usage:
-            logger.info(
-                "Case sheet page extracted (%s): %s prompt tokens",
-                "image" if image else "text", response.usage.prompt_tokens,
-            )
-        return json.loads(response.choices[0].message.content or "{}")
+    return json.loads(response.choices[0].message.content or "{}")
+
+
+def _extract_page(
+    client: OpenAI,
+    text: str | None,
+    image: tuple[bytes, str] | str | None,
+    inline: tuple[bytes, str] | None = None,
+) -> dict | None:
+    """One page — either PDF text or a single photo. Returns the raw parsed object,
+    or None if the call failed (one bad page shouldn't lose the others).
+
+    `inline` is the same image as raw bytes, set only when `image` is a public URL.
+    If OpenAI cannot download that link the page is retried with the bytes in the
+    request body, so an unreachable or slow link costs bandwidth, not the page.
+    """
+    prompt = _PROMPT.format(
+        text=text or "(no text layer — read the attached page image instead)",
+        max_source=_MAX_SOURCE_CHARS,
+    )
+    try:
+        return _call_page(client, prompt, image)
     except Exception as e:
-        logger.error(f"Case sheet page extraction failed: {e}")
+        if inline is None or not _is_unfetchable_url(e):
+            logger.error(f"Case sheet page extraction failed: {e}")
+            return None
+        logger.warning(
+            "OpenAI could not fetch the page image link (%s) — retrying with the "
+            "bytes inlined", e,
+        )
+    try:
+        return _call_page(client, prompt, inline)
+    except Exception as e:
+        logger.error(f"Case sheet page extraction failed on inline retry: {e}")
         return None
 
 
@@ -514,7 +544,8 @@ def extract_case_sheet(
     gets a form they can fill in.
     """
     pdf_text_parts: list[str] = []
-    images: list[tuple[bytes, str] | str] = []
+    # (what the model is given, the same image inlined as a fallback or None).
+    images: list[tuple[tuple[bytes, str] | str, tuple[bytes, str] | None]] = []
     # When the caller supplies public links (one per image, in the same order as
     # the images appear in `files`), hand those to the model instead of inlining
     # the bytes. Same result either way — OpenAI downloads and tiles the image
@@ -522,8 +553,11 @@ def extract_case_sheet(
     url_queue = list(image_urls or [])
     for data_bytes, name, ctype in files or []:
         if _is_image(name, ctype):
-            images.append(url_queue.pop(0) if url_queue
-                          else (data_bytes, _image_mime(name, ctype)))
+            inline = (data_bytes, _image_mime(name, ctype))
+            url = url_queue.pop(0) if url_queue else None
+            # The bytes are kept even when a link is used, so a link OpenAI cannot
+            # download costs a retry rather than the whole page.
+            images.append((url or inline, inline if url else None))
             continue
         text = extract_text(data_bytes, name, ctype)
         if text:
@@ -545,14 +579,14 @@ def extract_case_sheet(
         return _empty()
 
     # One call per page. See _PAGE_WORKERS for why images aren't batched.
-    jobs: list[tuple[str | None, tuple[bytes, str] | None]] = []
+    jobs: list[tuple] = []
     if pdf_text:
-        jobs.append((pdf_text, None))
-    jobs.extend((None, img) for img in images)
+        jobs.append((pdf_text, None, None))
+    jobs.extend((None, primary, inline) for primary, inline in images)
 
     client = OpenAI(api_key=settings.OPENAI_API_KEY)
     with ThreadPoolExecutor(max_workers=min(_PAGE_WORKERS, len(jobs))) as pool:
-        pages = list(pool.map(lambda j: _extract_page(client, j[0], j[1]), jobs))
+        pages = list(pool.map(lambda j: _extract_page(client, j[0], j[1], j[2]), jobs))
     pages = [p for p in pages if p]
     if not pages:
         return _empty()

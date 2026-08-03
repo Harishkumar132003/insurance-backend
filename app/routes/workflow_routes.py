@@ -4,6 +4,7 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile, status
 from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
+from starlette.concurrency import run_in_threadpool
 
 from app.controllers import case_sheet_controller
 from app.db.session import get_db
@@ -61,8 +62,13 @@ async def extract_case_sheet_route(
     """
     hospital_id = _require_hospital(current_user)
     uploads = [(await f.read(), f.filename, f.content_type) for f in files]
-    return case_sheet_controller.extract_and_store(
-        db, hospital_id, current_user.id, uploads
+    # Off the event loop. extract_and_store blocks for the whole duration of the
+    # OpenAI calls, and this process serves the signed public link that OpenAI
+    # fetches the page images from — run it inline on the loop and the server
+    # cannot answer that fetch, so the model times out downloading its own input.
+    return await run_in_threadpool(
+        case_sheet_controller.extract_and_store,
+        db, hospital_id, current_user.id, uploads,
     )
 
 

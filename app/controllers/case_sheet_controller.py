@@ -76,8 +76,12 @@ def extract_and_store(
     """
     _validate(files)
 
-    # Files are stored and the row created BEFORE extraction, because a public
-    # image link can only be minted once the row has an id.
+    # Files are stored and the row created and COMMITTED before extraction. The id
+    # is needed to mint the public image link, and a flush alone is not enough: the
+    # request that serves that link opens its own session, and under READ COMMITTED
+    # an uncommitted row does not exist yet — OpenAI would be handed a link to a
+    # 404. Committing here also releases the transaction for the duration of the
+    # AI calls instead of holding it open for the whole extraction.
     stored: list[dict] = []
     for data_bytes, name, ctype in files:
         stored_filename, file_path = save_case_sheet(
@@ -104,7 +108,8 @@ def extract_and_store(
         content_type=first["content_type"],
     )
     db.add(row)
-    db.flush()
+    db.commit()
+    db.refresh(row)
 
     result = extract_case_sheet(files, image_urls=_public_image_urls(row, files))
 
