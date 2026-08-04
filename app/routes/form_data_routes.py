@@ -19,6 +19,9 @@ async def submit_form(
     uhid: str = Form(...),
     policy_provider_id: str = Form(...),
     sections: str = Form(...),
+    # Set when the form was pre-filled from a case sheet — links that stored
+    # extraction to the case it produced.
+    case_sheet_id: str | None = Form(None),
     files: List[UploadFile] = File(None),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
@@ -30,6 +33,7 @@ async def submit_form(
     )
     return form_data_controller.create_claim_and_form_data(
         db, payload, hospital_id=current_user.hospital_id, files=files or [],
+        case_sheet_id=case_sheet_id or None,
     )
 
 

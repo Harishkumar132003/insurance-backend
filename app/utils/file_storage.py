@@ -67,6 +67,23 @@ def save_settlement_file(hospital_id, file_bytes: bytes, original_filename: str)
     return stored_filename, file_path
 
 
+def save_case_sheet(hospital_id, file_bytes: bytes, original_filename: str) -> tuple[str, str]:
+    """Save an uploaded case sheet. Hospital-scoped rather than claim-scoped
+    because it is stored at extract time, before any claim case exists.
+    Returns (stored_filename, file_path)."""
+    dir_path = os.path.join(UPLOAD_BASE_DIR, "case_sheets", str(hospital_id))
+    os.makedirs(dir_path, exist_ok=True)
+
+    ext = os.path.splitext(original_filename)[1]
+    stored_filename = f"{uuid.uuid4().hex[:12]}{ext}"
+    file_path = os.path.join(dir_path, stored_filename)
+
+    with open(file_path, "wb") as f:
+        f.write(file_bytes)
+
+    return stored_filename, file_path
+
+
 def delete_file(file_path: str) -> None:
     """Delete a file from disk."""
     full_path = os.path.abspath(file_path)

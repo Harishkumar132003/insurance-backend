@@ -14,6 +14,7 @@ from app.schemas.hospital_provider import (
     HospitalProviderResponse,
     HospitalProviderUpdate,
     MouExtractResponse,
+    MouUploadResponse,
     OnboardedProviderResponse,
 )
 from app.schemas.policy_provider_config import PolicyProviderResponse
@@ -81,21 +82,27 @@ async def create_hospital_provider(
     tpa_toll_free_fax: str | None = Form(None),
     policy_provider_id: UUID | None = Form(None),
     room_charges: str | None = Form(None),
+    extracted_data: str | None = Form(None),
     file: UploadFile | None = File(None),
     db: Session = Depends(get_db),
     current_user: User = Depends(require_hospital_admin),
 ):
     hospital_id = _require_hospital(current_user)
 
-    parsed_charges = None
-    if room_charges:
+    def _parse(raw: str | None, field: str):
+        if not raw:
+            return None
         try:
-            parsed_charges = json.loads(room_charges)
+            return json.loads(raw)
         except json.JSONDecodeError:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail="room_charges must be valid JSON",
+                detail=f"{field} must be valid JSON",
             )
+
+    parsed_charges = _parse(room_charges, "room_charges")
+    # The raw AI extraction the form previewed, kept for audit / re-edit.
+    parsed_extracted = _parse(extracted_data, "extracted_data")
 
     mou_bytes = mou_filename = mou_content_type = None
     if file is not None:
@@ -117,6 +124,27 @@ async def create_hospital_provider(
         mou_filename=mou_filename,
         mou_content_type=mou_content_type,
         existing_provider_id=policy_provider_id,
+        extracted_data=parsed_extracted,
+    )
+
+
+@router.post("/hospital-providers/{mapping_id}/mou", response_model=MouUploadResponse)
+async def upload_mou(
+    mapping_id: UUID,
+    file: UploadFile = File(...),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_hospital_admin),
+):
+    """Attach or replace this mapping's MOU and re-run the tariff extraction.
+
+    Returns the extracted charges for the admin to review — `room_charges` is left
+    untouched, so the live tariffs only change when the follow-up update commits
+    the reviewed values.
+    """
+    hospital_id = _require_hospital(current_user)
+    file_bytes = await file.read()
+    return hospital_provider_controller.replace_mou(
+        db, hospital_id, mapping_id, file_bytes, file.filename, file.content_type
     )
 
 

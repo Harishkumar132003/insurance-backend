@@ -28,6 +28,7 @@ from app.models.part_d_letter import PartDLetter
 from app.models.pre_auth_patient import PreAuthPatient
 from app.models.pre_auth_treatment import PreAuthTreatment
 from app.models.pre_auth_hospitalization import PreAuthHospitalization
+from app.models.case_sheet_extraction import CaseSheetExtraction
 from app.models.claim_bill_item import ClaimBillItem
 from app.models.invoice import Invoice
 from app.models.invoice_payment import InvoicePayment

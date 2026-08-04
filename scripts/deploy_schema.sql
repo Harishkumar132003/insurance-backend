@@ -77,17 +77,21 @@ CREATE TABLE IF NOT EXISTS pre_auth_treatment (
     doctor_name             TEXT,
     provisional_diagnosis   TEXT,
     icd10_code              TEXT,
-    surgery_name            TEXT,
-    surgery_icd_code        TEXT,
-    drug_route              TEXT,
+    surgery_icd_code        TEXT,   -- ICD-10-PCS procedure code
+    drug_route              JSONB,  -- array of DRUG_ROUTES codes, e.g. ["IV","PO"]
     injury_cause            TEXT,
     past_history            TEXT,
     duration_days           INTEGER,
-    other_treatment         TEXT,
     critical_findings       TEXT,
     treatment_details       TEXT,
     illness_description     TEXT,
     first_consultation_date DATE,
+    -- Ordered array of {treatment_details, drug_route[], surgery_icd_code,
+    -- injury_cause}. The scalar columns above mirror entry #1 for the print/email.
+    treatments              JSONB,
+    -- Ordered array of {investigation_category, investigation_name,
+    -- investigation_description}; revealed by tp_investigation.
+    investigations          JSONB,
     -- treatment_plan.*
     tp_investigation        BOOLEAN,
     tp_intensive_care       BOOLEAN,

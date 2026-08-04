@@ -48,6 +48,54 @@ def _run_migrations():
         "ALTER TABLE claim_case_emails ADD COLUMN IF NOT EXISTS email_type VARCHAR",
         "ALTER TABLE hospitalization ADD COLUMN IF NOT EXISTS approved_amount NUMERIC(12,2)",
         "ALTER TABLE claim_case_documents ADD COLUMN IF NOT EXISTS document_type VARCHAR",
+        # Requested investigations on the pre-auth treating_doctor section — an
+        # ordered JSONB array (variable length, so not typed columns).
+        "ALTER TABLE pre_auth_treatment ADD COLUMN IF NOT EXISTS investigations JSONB",
+        # The repeatable Treatments group. Without this the array was dropped on
+        # save and every reload rebuilt a single entry from the flat mirror.
+        "ALTER TABLE pre_auth_treatment ADD COLUMN IF NOT EXISTS treatments JSONB",
+        # A case sheet can be several photographed pages, not just one PDF.
+        "ALTER TABLE case_sheet_extraction ADD COLUMN IF NOT EXISTS files JSONB",
+        # Backfill rows written before multi-file support from their scalar columns
+        # so they render as a one-page list rather than an empty one.
+        """
+        UPDATE case_sheet_extraction
+           SET files = jsonb_build_array(jsonb_build_object(
+                 'original_filename', original_filename,
+                 'stored_filename',   stored_filename,
+                 'file_path',         file_path,
+                 'content_type',      content_type))
+         WHERE files IS NULL AND file_path IS NOT NULL
+        """,
+        # Surgery Name / Other Treatment removed from the pre-auth form: the name
+        # was a 10-entry hardcoded dropdown and other_treatment duplicated
+        # treatment_details. surgery_icd_code stays (now AI-suggested).
+        "ALTER TABLE pre_auth_treatment DROP COLUMN IF EXISTS surgery_name",
+        "ALTER TABLE pre_auth_treatment DROP COLUMN IF EXISTS other_treatment",
+        # Drug Route became multi-select: TEXT -> JSONB array of route codes.
+        # ALTER COLUMN TYPE isn't idempotent and this list runs on every startup,
+        # so guard on the current type — without it a second boot would re-wrap
+        # ["PO"] into [["PO"]]. Existing single codes become one-element arrays;
+        # a blank becomes []; NULL stays NULL.
+        """
+        DO $$
+        BEGIN
+          IF EXISTS (
+            SELECT 1 FROM information_schema.columns
+             WHERE table_name = 'pre_auth_treatment'
+               AND column_name = 'drug_route'
+               AND data_type <> 'jsonb'
+          ) THEN
+            ALTER TABLE pre_auth_treatment
+              ALTER COLUMN drug_route TYPE JSONB
+              USING CASE
+                WHEN drug_route IS NULL     THEN NULL
+                WHEN btrim(drug_route) = '' THEN '[]'::jsonb
+                ELSE to_jsonb(ARRAY[drug_route])
+              END;
+          END IF;
+        END $$;
+        """,
         "ALTER TABLE claim_case_email_attachments ADD COLUMN IF NOT EXISTS document_type VARCHAR",
         # Allow Part-D drafts (pre-approval). One UNIQUE per approval-bound
         # row; one UNIQUE per draft (claim_case_id where email_id IS NULL).

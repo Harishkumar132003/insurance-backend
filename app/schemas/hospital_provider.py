@@ -52,6 +52,15 @@ class OnboardedProviderResponse(BaseModel):
     room_charges: dict[str, Any] | None = None
 
 
+class MouUploadResponse(BaseModel):
+    """Result of attaching/replacing an MOU on an existing mapping: the refreshed
+    mapping (so the UI can show the new filename) plus the freshly extracted
+    tariffs for the admin to review. `room_charges` is not changed by the upload —
+    the admin commits the reviewed values through the normal update call."""
+    mapping: HospitalProviderResponse
+    extracted: MouExtractResponse
+
+
 class HospitalProviderUpdate(BaseModel):
     provider_name: str | None = None
     email: str | None = None
