@@ -22,18 +22,18 @@ class Settings(BaseSettings):
     AIAGENT_DATABASE_URL: str = "postgresql+psycopg2://admin:admin123@localhost:5432/aiagent"
     # Cube instance used by /ai/intent to fetch /meta and build the Cube query.
     # In dev mode /meta needs no token; set CUBE_API_SECRET to sign one otherwise.
-    CUBE_API_URL: str = "http://localhost:4000"
+    CUBE_API_URL: str = "http://cube:4000"
     CUBE_API_SECRET: str = ""
     # Cube SQL API (Postgres wire protocol) — used by the NL->Cube SQL pipeline to
     # execute generated SQL against the semantic layer. Enable on Cube with
     # CUBEJS_PG_SQL_PORT / CUBEJS_SQL_USER / CUBEJS_SQL_PASSWORD.
-    CUBE_SQL_HOST: str = "localhost"
+    CUBE_SQL_HOST: str = "cube"
     CUBE_SQL_PORT: int = 15432
     CUBE_SQL_USER: str = "cube"
     CUBE_SQL_PASSWORD: str = "cubeSql2026"
     CUBE_SQL_DB: str = "cube"
     # Qdrant semantic retrieval of relevant cube members for the query-gen step.
-    QDRANT_URL: str = "http://localhost:6333"
+    QDRANT_URL: str = "http://qdrant:6333"
     QDRANT_COLLECTION: str = "cube_metadata_openai"
     EMBED_MODEL: str = "text-embedding-3-small"
     CUBE_RETRIEVAL_TOPK: int = 20
