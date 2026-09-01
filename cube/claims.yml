@@ -1,0 +1,271 @@
+# Cube data model for the `claims` table.
+# Ref: https://docs.cube.dev/docs/data-modeling/cubes
+#
+# One row per claim — the CLAIM stage of a case. claims is 1:1 with
+# hospitalization (unique hospitalization_id): a case has at most one claim,
+# raised after the pre-auth stage. Used here as semantic context for an LLM: it
+# describes the claim's columns, its own workflow status, the claimed vs.
+# approved amounts, lifecycle timestamps, and how it relates to the case
+# (hospitalization) and tenant (hospitals).
+#
+# NOTE on status: `claims.status` is CLAIM_-prefixed (CLAIM_SUBMITTED,
+# CLAIM_APPROVED, CLAIM_ADR_NMI, ...), consistent with hospitalization.case_status
+# and claim_status_tracking. The frontend still sends bare outcomes (APPROVED,
+# DENIED) which the controllers prefix before writing this column.
+cubes:
+  - name: claims
+    sql_table: public.claims
+    description: >
+      Claims raised to insurers/TPAs after treatment (the CLAIM stage). Exactly
+      one claim per hospitalization case. Tracks the claim's workflow status and
+      the claimed vs. approved amounts, with submitted/processed timestamps.
+
+    joins:
+      - name: hospitalization
+        sql: "{CUBE}.hospitalization_id = {hospitalization}.id"
+        relationship: one_to_one
+      - name: hospitals
+        sql: "{CUBE}.hospital_id = {hospitals}.id"
+        relationship: many_to_one
+
+    dimensions:
+      - name: id
+        sql: id
+        type: number
+        primary_key: true
+        description: Primary key of the claim row (bigint, auto-increment).
+
+      - name: hospitalization_id
+        sql: hospitalization_id
+        type: string
+        description: FK to hospitalization.id — the case this claim belongs to (unique; one claim per case).
+
+      - name: hospital_id
+        sql: hospital_id
+        type: string
+        description: FK to hospitals.id — the tenant hospital (denormalized from the case).
+
+      - name: uhid
+        sql: uhid
+        type: string
+        description: Unique hospital patient identifier (denormalized from the case).
+
+      - name: claim_number
+        sql: claim_number
+        type: string
+        description: The claim number assigned to this case.
+
+      - name: status
+        sql: status
+        type: string
+        description: >
+          The claim's workflow status, CLAIM_-prefixed (consistent with
+          hospitalization.case_status / claim_status_tracking). Complete set of
+          possible values: CLAIM_SUBMITTED (default; sent to insurer),
+          CLAIM_ADR_SUBMITTED (replied to an insurer query), CLAIM_RECONSIDER (in
+          the reconsideration flow), CLAIM_ADR_NMI (insurer raised a query / needs
+          more info), CLAIM_APPROVED, CLAIM_PARTIALLY_APPROVED, CLAIM_DENIED
+          (outcomes), and CLAIM_UNKNOWN (fallback when an outcome could not be
+          classified).
+
+      - name: submitted_at
+        sql: submitted_at
+        type: time
+        description: >
+          When the claim was submitted to the insurer — the PRIMARY event time.
+          Use this as the query's timeDimension for time-range/trend questions:
+          pass a dateRange (e.g. "this month", "last 30 days", "year to date", or
+          an explicit [from, to]) and a granularity (day/week/month/quarter/year).
+
+      - name: processed_at
+        sql: processed_at
+        type: time
+        description: >
+          When the claim was decided (approved/partially/denied). NULL while the
+          claim is still open/awaiting a decision.
+
+      - name: created_at
+        sql: created_at
+        type: time
+        description: When the claim row was created.
+
+    # Segments = named, reusable filters mapping plain questions to slices.
+    # Ref: https://docs.cube.dev/docs/data-modeling/segments
+    segments:
+      # --- Status: awaiting the insurer (in-flight) -------------------------
+      - name: submitted
+        sql: "{CUBE}.status = 'CLAIM_SUBMITTED'"
+        description: Claims submitted to the insurer/TPA, awaiting a decision.
+
+      - name: adr_submitted
+        sql: "{CUBE}.status = 'CLAIM_ADR_SUBMITTED'"
+        description: >
+          ADR reply submitted — the hospital has responded to the insurer's
+          additional-document / more-info request and is awaiting a decision.
+
+      - name: reconsideration
+        sql: "{CUBE}.status = 'CLAIM_RECONSIDER'"
+        description: Claims in the reconsideration flow after a denial.
+
+      - name: pending
+        sql: "{CUBE}.status IN ('CLAIM_SUBMITTED', 'CLAIM_ADR_SUBMITTED', 'CLAIM_RECONSIDER')"
+        description: >
+          Awaiting insurer response — submitted, ADR reply, or reconsideration
+          but not yet decided.
+
+      # --- Status: action needed by the hospital ----------------------------
+      - name: adr_query
+        sql: "{CUBE}.status = 'CLAIM_ADR_NMI'"
+        description: >
+          Insurer raised an ADR / query (Need More Information) — the hospital
+          must supply additional documents/details before it can proceed.
+
+      - name: action_needed
+        sql: "{CUBE}.status IN ('CLAIM_ADR_NMI', 'CLAIM_DENIED')"
+        description: Needs hospital action — an open query or a denial to respond to.
+
+      # --- Status: rejection -------------------------------------------------
+      - name: denied
+        sql: "{CUBE}.status = 'CLAIM_DENIED'"
+        description: Denied claims.
+
+      # NOTE: there is no `cancelled` segment here — cancellation is recorded on
+      # the case (hospitalization.case_status = 'CANCELLED'), NOT on claims.status.
+      # To find claims of cancelled cases, filter via the hospitalization join.
+
+      # --- Approval degree (amount-based) -----------------------------------
+      - name: fully_approved
+        sql: "{CUBE}.approved_amount IS NOT NULL AND {CUBE}.approved_amount >= {CUBE}.claimed_amount"
+        description: Approved amount covers the full claimed amount (approved >= claimed).
+
+      - name: partially_approved
+        sql: "{CUBE}.approved_amount > 0 AND {CUBE}.approved_amount < {CUBE}.claimed_amount"
+        description: Approved for some money but less than claimed (0 < approved < claimed).
+
+      - name: approved_any
+        sql: "{CUBE}.approved_amount IS NOT NULL AND {CUBE}.approved_amount > 0"
+        description: Any approval — a non-zero approved amount on record, regardless of status.
+
+      - name: awaiting_approval_amount
+        sql: "{CUBE}.approved_amount IS NULL"
+        description: No approved amount recorded yet.
+
+      # --- Processing & value -----------------------------------------------
+      - name: processed
+        sql: "{CUBE}.processed_at IS NOT NULL"
+        description: Claims that have been decided (processed_at is set).
+
+      - name: open
+        sql: "{CUBE}.processed_at IS NULL"
+        description: Claims not yet decided (processed_at is null).
+
+      - name: high_value
+        sql: "{CUBE}.claimed_amount >= 100000"
+        description: Big-ticket claims (claimed amount >= INR 1,00,000).
+
+      # --- Time-based (relative, on submitted_at) ---------------------------
+      # Convenience shortcuts for common relative ranges. For arbitrary/explicit
+      # ranges, prefer the submitted_at timeDimension with a dateRange instead.
+      - name: today
+        sql: "{CUBE}.submitted_at >= date_trunc('day', now())"
+        description: Claims submitted today.
+
+      - name: this_week
+        sql: "{CUBE}.submitted_at >= date_trunc('week', now())"
+        description: Claims submitted since the start of the current week (Mon).
+
+      - name: this_month
+        sql: "{CUBE}.submitted_at >= date_trunc('month', now())"
+        description: Claims submitted since the start of the current month.
+
+      - name: this_year
+        sql: "{CUBE}.submitted_at >= date_trunc('year', now())"
+        description: Claims submitted since the start of the current year (year to date).
+
+      - name: last_7_days
+        sql: "{CUBE}.submitted_at >= now() - interval '7 days'"
+        description: Claims submitted in the last 7 days.
+
+      - name: last_30_days
+        sql: "{CUBE}.submitted_at >= now() - interval '30 days'"
+        description: Claims submitted in the last 30 days.
+
+      - name: last_90_days
+        sql: "{CUBE}.submitted_at >= now() - interval '90 days'"
+        description: Claims submitted in the last 90 days.
+
+    measures:
+      - name: count
+        type: count
+        description: Number of claims.
+
+      - name: conversion_count
+        type: count
+        description: >
+          Number of PRE-AUTHS CONVERTED INTO CLAIMS. A claim is raised only after
+          a case completes pre-auth, and there is exactly one claim per case — so a
+          claim existing IS a pre-auth→claim conversion. Use THIS for any
+          "pre-auths converted to claims" / "conversions" question (do NOT use
+          pre_auth approval segments). For a time window, filter on submitted_at
+          or created_at — the conversion happens when the claim is raised.
+
+      - name: approved_count
+        type: count
+        filters:
+          - sql: "{CUBE}.approved_amount IS NOT NULL AND {CUBE}.approved_amount > 0"
+        description: Number of claims with a non-zero approved amount on record.
+
+      - name: pending_count
+        type: count
+        filters:
+          - sql: "{CUBE}.status IN ('CLAIM_SUBMITTED', 'CLAIM_ADR_SUBMITTED', 'CLAIM_RECONSIDER')"
+        description: Number of claims awaiting an insurer decision.
+
+      - name: denied_count
+        type: count
+        filters:
+          - sql: "{CUBE}.status = 'CLAIM_DENIED'"
+        description: Number of denied claims.
+
+      - name: processed_count
+        type: count
+        filters:
+          - sql: "{CUBE}.processed_at IS NOT NULL"
+        description: Number of claims that have been decided.
+
+      - name: total_claimed_amount
+        sql: claimed_amount
+        type: sum
+        description: Total claimed amount across claims, in INR.
+
+      - name: total_approved_amount
+        sql: approved_amount
+        type: sum
+        description: Total approved amount across claims, in INR.
+
+      - name: avg_claimed_amount
+        sql: claimed_amount
+        type: avg
+        description: Average claimed amount per claim, in INR.
+
+      - name: avg_approved_amount
+        sql: approved_amount
+        type: avg
+        description: Average approved amount per claim, in INR.
+
+      - name: max_claimed_amount
+        sql: claimed_amount
+        type: max
+        description: Highest single claimed amount on any one claim, in INR (use for "highest/largest single claim").
+
+      - name: max_approved_amount
+        sql: approved_amount
+        type: max
+        description: Highest single approved amount on any one claim, in INR.
+
+      - name: total_disallowed_amount
+        sql: "({CUBE}.claimed_amount - {CUBE}.approved_amount)"
+        type: sum
+        filters:
+          - sql: "{CUBE}.approved_amount IS NOT NULL AND {CUBE}.claimed_amount > {CUBE}.approved_amount"
+        description: Total disallowed gap (claimed minus approved) across short-paid claims, in INR.

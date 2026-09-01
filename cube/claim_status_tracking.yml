@@ -1,0 +1,139 @@
+# Cube data model for the `claim_status_tracking` table.
+# Ref: https://docs.cube.dev/docs/data-modeling/cubes
+#
+# Status-transition LOG for the CLAIM stage: one row per claim status change, with
+# turn-around time (TAT), documents and a remark. MANY rows per case — use for
+# TAT / timeline / transition questions, NOT for counting cases. Statuses are
+# CLAIM_-prefixed (CLAIM_SUBMITTED, CLAIM_APPROVED, ...) like claims.status.
+cubes:
+  - name: claim_status_tracking
+    sql_table: public.claim_status_tracking
+    description: >
+      Claim status-change log with turn-around time per transition. Use for "how
+      long did the claim take", claim timelines, and counts of claim transitions.
+
+    joins:
+      - name: hospitalization
+        sql: "{CUBE}.hospitalization_id = {hospitalization}.id"
+        relationship: many_to_one
+      - name: hospitals
+        sql: "{CUBE}.hospital_id = {hospitals}.id"
+        relationship: many_to_one
+
+    dimensions:
+      - name: id
+        sql: id
+        type: number
+        primary_key: true
+        description: Primary key of the transition row (bigint).
+
+      - name: hospitalization_id
+        sql: hospitalization_id
+        type: string
+        description: FK to hospitalization.id — the case this transition belongs to.
+
+      - name: hospital_id
+        sql: hospital_id
+        type: string
+        description: FK to hospitals.id — the tenant hospital.
+
+      - name: uhid
+        sql: uhid
+        type: string
+        description: Unique hospital patient identifier.
+
+      - name: claim_number
+        sql: claim_number
+        type: string
+        description: The claim number for this case.
+
+      - name: from_status
+        sql: from_status
+        type: string
+        description: Status before the change, CLAIM_-prefixed (NULL for the first transition).
+
+      - name: to_status
+        sql: to_status
+        type: string
+        description: >
+          Status after the change, CLAIM_-prefixed: CLAIM_SUBMITTED,
+          CLAIM_ADR_SUBMITTED, CLAIM_ADR_NMI, CLAIM_APPROVED,
+          CLAIM_PARTIALLY_APPROVED, CLAIM_DENIED, CLAIM_CANCELLED.
+
+      - name: turnaround_text
+        sql: turn_around_time_text
+        type: string
+        description: Human-readable turn-around time for this transition.
+
+      - name: remark
+        sql: remark
+        type: string
+        description: Free-text remark captured with the transition.
+
+      - name: created_at
+        sql: created_at
+        type: time
+        description: When the transition was recorded — the primary event time.
+
+    segments:
+      # --- Transition outcome (to_status, CLAIM_-prefixed) ---
+      - name: to_approved
+        sql: "{CUBE}.to_status IN ('CLAIM_APPROVED', 'CLAIM_PARTIALLY_APPROVED')"
+        description: Transitions into a claim approval (full or partial).
+      - name: to_submitted
+        sql: "{CUBE}.to_status = 'CLAIM_SUBMITTED'"
+        description: Claim submission transitions.
+      - name: to_query
+        sql: "{CUBE}.to_status = 'CLAIM_ADR_NMI'"
+        description: Transitions where the insurer raised an ADR / query on the claim.
+      - name: to_adr_response
+        sql: "{CUBE}.to_status = 'CLAIM_ADR_SUBMITTED'"
+        description: Transitions where the hospital replied to a claim ADR.
+      - name: to_cancelled
+        sql: "{CUBE}.to_status = 'CLAIM_CANCELLED'"
+        description: Claim cancellation transitions.
+
+      # --- Content flags ---
+      - name: has_documents
+        sql: "{CUBE}.document_link IS NOT NULL"
+        description: Transitions that shared one or more documents.
+      - name: has_remark
+        sql: "{CUBE}.remark IS NOT NULL AND btrim({CUBE}.remark) <> ''"
+        description: Transitions that carry a remark.
+      - name: has_turnaround
+        sql: "{CUBE}.turn_around_time IS NOT NULL"
+        description: Transitions with a recorded turn-around time.
+
+      # --- Time (on created_at) ---
+      - name: this_month
+        sql: "{CUBE}.created_at >= date_trunc('month', now())"
+        description: Transitions recorded since the start of the current month.
+      - name: last_30_days
+        sql: "{CUBE}.created_at >= now() - interval '30 days'"
+        description: Transitions recorded in the last 30 days.
+
+    measures:
+      - name: count
+        type: count
+        description: Number of claim status transitions (NOT number of cases/claims).
+
+      - name: avg_turnaround_hours
+        sql: "EXTRACT(EPOCH FROM {CUBE}.turn_around_time) / 3600.0"
+        type: avg
+        description: Average claim turn-around time per transition, in hours.
+
+      - name: avg_turnaround_days
+        sql: "EXTRACT(EPOCH FROM {CUBE}.turn_around_time) / 86400.0"
+        type: avg
+        description: Average claim turn-around time per transition, in days.
+
+      - name: max_turnaround_hours
+        sql: "EXTRACT(EPOCH FROM {CUBE}.turn_around_time) / 3600.0"
+        type: max
+        description: Longest claim turn-around time, in hours.
+
+      - name: query_count
+        type: count
+        filters:
+          - sql: "{CUBE}.to_status = 'CLAIM_ADR_NMI'"
+        description: Number of ADR/queries the insurer raised on claims.

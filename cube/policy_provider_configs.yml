@@ -1,0 +1,63 @@
+# Cube data model for the `policy_provider_configs` table (the insurer / TPA).
+# Ref: https://docs.cube.dev/docs/data-modeling/cubes
+#
+# One row per configured insurer/TPA (policy provider). Cases link to it via
+# hospitalization.policy_provider_id, so joining this cube lets any case /
+# pre-auth / claim metric be grouped or filtered by the provider NAME.
+cubes:
+  - name: policy_provider_configs
+    sql_table: public.policy_provider_configs
+    description: >
+      Insurer / TPA (policy provider) master. Use its `name` to group or filter
+      cases, pre-auths and claims by provider (e.g. "cases by provider",
+      "approved amount by insurer").
+
+    dimensions:
+      - name: id
+        sql: id
+        type: string
+        primary_key: true
+        description: Primary key of the provider (uuid).
+
+      - name: name
+        sql: name
+        type: string
+        description: Provider / insurer name (e.g. Star Health, SBI-provider). Group/filter by this for "by provider".
+
+      - name: tpa_name
+        sql: tpa_name
+        type: string
+        description: TPA name for this provider.
+
+      - name: provider_id
+        sql: provider_id
+        type: string
+        description: External provider registration id (ROHINI-style, unique).
+
+      - name: email
+        sql: email
+        type: string
+        description: Provider contact email.
+
+      - name: is_onboarded
+        sql: is_onboarded
+        type: boolean
+        description: Whether the provider is onboarded (integrated) with the hospital.
+
+      - name: created_at
+        sql: created_at
+        type: time
+        description: When the provider config was created.
+
+    segments:
+      - name: onboarded
+        sql: "{CUBE}.is_onboarded = true"
+        description: Providers that are onboarded/integrated.
+      - name: not_onboarded
+        sql: "{CUBE}.is_onboarded = false"
+        description: Providers that are not yet onboarded.
+
+    measures:
+      - name: count
+        type: count
+        description: Number of providers (insurers/TPAs).

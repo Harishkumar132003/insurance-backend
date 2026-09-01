@@ -1,0 +1,51 @@
+# Cube data model for the `hospitals` table (the tenant).
+# Ref: https://docs.cube.dev/docs/data-modeling/cubes
+#
+# One row per hospital (tenant). Nearly every other table carries a hospital_id
+# scoping it to a tenant.
+cubes:
+  - name: hospitals
+    sql_table: public.hospitals
+    description: The tenant hospital that owns cases, pre-auths, claims and settlements.
+
+    dimensions:
+      - name: id
+        sql: id
+        type: string
+        primary_key: true
+        description: Primary key of the hospital (uuid).
+
+      - name: name
+        sql: name
+        type: string
+        description: Hospital name.
+
+      - name: address
+        sql: address
+        type: string
+        description: Hospital address.
+
+      - name: rohini_id
+        sql: rohini_id
+        type: string
+        description: ROHINI registration id (unique hospital identifier in insurance networks).
+
+      - name: email
+        sql: email
+        type: string
+        description: Hospital contact / mailbox email.
+
+      - name: created_at
+        sql: created_at
+        type: time
+        description: When the hospital record was created.
+
+      - name: updated_at
+        sql: updated_at
+        type: time
+        description: When the hospital record was last updated.
+
+    measures:
+      - name: count
+        type: count
+        description: Number of hospitals (tenants).

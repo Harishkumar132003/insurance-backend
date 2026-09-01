@@ -1,0 +1,94 @@
+# Cube data model for the `settlement_batch` table.
+# Ref: https://docs.cube.dev/docs/data-modeling/cubes
+#
+# One row per settlement batch (a remittance advice from an insurer/TPA): the
+# total amount paid, payment details, and the provider. Its per-claim lines live
+# in settlement_item. Use for batch-level totals and payment questions.
+cubes:
+  - name: settlement_batch
+    sql_table: public.settlement_batch
+    description: >
+      Settlement batches (remittance advices) from insurers/TPAs — total amount
+      paid, payment mode, UTR, settlement date and provider. Use for total
+      settlement received, settlements over time, and by provider.
+
+    joins:
+      - name: hospitals
+        sql: "{CUBE}.hospital_id = {hospitals}.id"
+        relationship: many_to_one
+      - name: policy_provider_configs
+        sql: "{CUBE}.policy_provider_id = {policy_provider_configs}.id"
+        relationship: many_to_one
+
+    dimensions:
+      - name: id
+        sql: id
+        type: string
+        primary_key: true
+        description: Primary key of the settlement batch (uuid).
+
+      - name: hospital_id
+        sql: hospital_id
+        type: string
+        description: FK to hospitals.id — the tenant hospital.
+
+      - name: policy_provider_id
+        sql: policy_provider_id
+        type: string
+        description: FK to policy_provider_configs.id — the paying insurer/TPA.
+
+      - name: tpa_insurer
+        sql: tpa_insurer
+        type: string
+        description: Insurer/TPA name as printed on the remittance (mirrors the selected provider).
+
+      - name: payment_mode
+        sql: payment_mode
+        type: string
+        description: Payment mode (e.g. NEFT, RTGS, cheque).
+
+      - name: utr_number
+        sql: utr_number
+        type: string
+        description: Bank UTR / transaction reference for the payment.
+
+      - name: settlement_number
+        sql: settlement_number
+        type: string
+        description: Settlement / remittance advice number.
+
+      - name: settlement_date
+        sql: settlement_date
+        type: time
+        description: Date of the settlement — the primary event time for "settled in <period>".
+
+      - name: created_at
+        sql: created_at
+        type: time
+        description: When the batch was uploaded.
+
+    segments:
+      - name: this_month
+        sql: "{CUBE}.settlement_date >= date_trunc('month', now())"
+        description: Settlements dated in the current month.
+      - name: this_year
+        sql: "{CUBE}.settlement_date >= date_trunc('year', now())"
+        description: Settlements dated in the current year.
+      - name: last_30_days
+        sql: "{CUBE}.settlement_date >= now() - interval '30 days'"
+        description: Settlements dated in the last 30 days.
+
+    measures:
+      - name: count
+        type: count
+        description: Number of settlement batches.
+
+      - name: total_settlement_amount
+        sql: total_settlement_amount
+        type: sum
+        description: Total amount settled across batches, in INR.
+
+      - name: avg_settlement_amount
+        sql: total_settlement_amount
+        type: avg
+        description: Average settlement amount per batch, in INR.

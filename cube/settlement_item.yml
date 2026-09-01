@@ -1,0 +1,135 @@
+# Cube data model for the `settlement_item` table.
+# Ref: https://docs.cube.dev/docs/data-modeling/cubes
+#
+# One row per settlement LINE (per claim) inside a settlement batch: the settled
+# amount, the disallowance (deduction), and whether it matched a known case.
+# Links to the case via hospitalization_id and to the batch via batch_id. Use for
+# "how much was settled", disallowances, and how many claims got settled.
+cubes:
+  - name: settlement_item
+    sql_table: public.settlement_item
+    description: >
+      Per-claim settlement lines (the money the insurer actually paid, plus any
+      disallowance/deduction). Use for settled amounts, disallowances, matched vs
+      unmatched lines, and counts of claims/cases that received a settlement.
+
+    joins:
+      - name: hospitalization
+        sql: "{CUBE}.hospitalization_id = {hospitalization}.id"
+        relationship: many_to_one
+      - name: hospitals
+        sql: "{CUBE}.hospital_id = {hospitals}.id"
+        relationship: many_to_one
+      - name: settlement_batch
+        sql: "{CUBE}.batch_id = {settlement_batch}.id"
+        relationship: many_to_one
+
+    dimensions:
+      - name: id
+        sql: id
+        type: number
+        primary_key: true
+        description: Primary key of the settlement line (bigint).
+
+      - name: batch_id
+        sql: batch_id
+        type: string
+        description: FK to settlement_batch.id — the batch this line belongs to.
+
+      - name: hospitalization_id
+        sql: hospitalization_id
+        type: string
+        description: FK to hospitalization.id — the case this settlement line matched (NULL if unmatched).
+
+      - name: hospital_id
+        sql: hospital_id
+        type: string
+        description: FK to hospitals.id — the tenant hospital.
+
+      - name: uhid
+        sql: uhid
+        type: string
+        description: Unique hospital patient identifier.
+
+      - name: claim_number
+        sql: claim_number
+        type: string
+        description: Claim number this settlement line is for.
+
+      - name: disallowance_reason
+        sql: disallowance_reason
+        type: string
+        description: Reason for the disallowance/deduction, if any.
+
+      - name: is_matched
+        sql: is_matched
+        type: boolean
+        description: Whether this line was matched to a known case (by claim number).
+
+      - name: created_at
+        sql: created_at
+        type: time
+        description: When the settlement line was recorded.
+
+    segments:
+      - name: matched
+        sql: "{CUBE}.is_matched = true"
+        description: Settlement lines matched to a known case.
+      - name: unmatched
+        sql: "{CUBE}.is_matched = false"
+        description: Settlement lines NOT matched to any case (need reconciliation).
+      - name: has_disallowance
+        sql: "{CUBE}.disallowance > 0"
+        description: Settlement lines with a disallowance/deduction.
+      - name: this_month
+        sql: "{CUBE}.created_at >= date_trunc('month', now())"
+        description: Settlement lines recorded since the start of the current month.
+      - name: last_30_days
+        sql: "{CUBE}.created_at >= now() - interval '30 days'"
+        description: Settlement lines recorded in the last 30 days.
+
+    measures:
+      - name: count
+        type: count
+        description: Number of settlement lines.
+
+      - name: matched_count
+        type: count
+        filters:
+          - sql: "{CUBE}.is_matched = true"
+        description: Number of settlement lines matched to a case.
+
+      - name: unmatched_count
+        type: count
+        filters:
+          - sql: "{CUBE}.is_matched = false"
+        description: Number of unmatched settlement lines.
+
+      - name: settled_case_count
+        sql: hospitalization_id
+        type: count_distinct
+        filters:
+          - sql: "{CUBE}.is_matched = true"
+        description: >
+          Number of DISTINCT cases/claims that received a settlement. Use THIS for
+          "how many claims/pre-auths got settled / received a settlement".
+
+      - name: total_settled_amount
+        sql: settled_amount
+        type: sum
+        description: Total amount actually settled (paid) by the insurer, in INR.
+
+      - name: total_disallowance
+        sql: disallowance
+        type: sum
+        description: Total disallowed/deducted amount across settlement lines, in INR.
+
+      - name: total_claim_raised
+        sql: claim_raised_amount
+        type: sum
+        description: Total claim amount raised for these settlement lines, in INR.
+
+      - name: avg_settled_amount
+        sql: settled_amount
+        type: avg
+        description: Average settled amount per line, in INR.

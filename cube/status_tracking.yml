@@ -1,0 +1,116 @@
+# Combined status-transition cube (pre-auth + claim) for overall turnaround-time
+# questions. Ref: https://docs.cube.dev/docs/data-modeling/cubes
+#
+# A derived cube: UNION ALL of preauth_status_tracking and claim_status_tracking,
+# with a `stage` column (PRE_AUTH / CLAIM). Use for OVERALL turnaround (e.g.
+# "average turnaround time of a provider" across both stages) and for "turnaround
+# by stage". For a single stage, prefer the dedicated preauth_status_tracking /
+# claim_status_tracking cubes.
+cubes:
+  - name: status_tracking
+    sql: >
+      SELECT 'P-' || id AS id, hospitalization_id, hospital_id, uhid,
+             from_status, to_status, turn_around_time, created_at,
+             'PRE_AUTH' AS stage
+        FROM public.preauth_status_tracking
+      UNION ALL
+      SELECT 'C-' || id AS id, hospitalization_id, hospital_id, uhid,
+             from_status, to_status, turn_around_time, created_at,
+             'CLAIM' AS stage
+        FROM public.claim_status_tracking
+    description: >
+      All status transitions across BOTH stages (pre-auth + claim) with their
+      turn-around time. Use for overall/insurer turnaround and turnaround broken
+      down by stage. One row per transition (many per case).
+
+    joins:
+      - name: hospitalization
+        sql: "{CUBE}.hospitalization_id = {hospitalization}.id"
+        relationship: many_to_one
+      - name: hospitals
+        sql: "{CUBE}.hospital_id = {hospitals}.id"
+        relationship: many_to_one
+
+    dimensions:
+      - name: id
+        sql: id
+        type: string
+        primary_key: true
+        description: Synthetic key (P-<id> for pre-auth, C-<id> for claim transitions).
+
+      - name: stage
+        sql: stage
+        type: string
+        description: Which stage the transition belongs to — PRE_AUTH or CLAIM. Group by this to split pre-auth vs claim.
+
+      - name: hospitalization_id
+        sql: hospitalization_id
+        type: string
+        description: FK to hospitalization.id — the case.
+
+      - name: hospital_id
+        sql: hospital_id
+        type: string
+        description: FK to hospitals.id — the tenant hospital.
+
+      - name: uhid
+        sql: uhid
+        type: string
+        description: Unique hospital patient identifier.
+
+      - name: from_status
+        sql: from_status
+        type: string
+        description: Status before the change.
+
+      - name: to_status
+        sql: to_status
+        type: string
+        description: Status after the change (bare for pre-auth, CLAIM_-prefixed for claim).
+
+      - name: created_at
+        sql: created_at
+        type: time
+        description: When the transition was recorded.
+
+    segments:
+      - name: pre_auth_stage
+        sql: "{CUBE}.stage = 'PRE_AUTH'"
+        description: Pre-auth-stage transitions only.
+      - name: claim_stage
+        sql: "{CUBE}.stage = 'CLAIM'"
+        description: Claim-stage transitions only.
+      - name: has_turnaround
+        sql: "{CUBE}.turn_around_time IS NOT NULL"
+        description: Transitions with a recorded turn-around time.
+      - name: this_month
+        sql: "{CUBE}.created_at >= date_trunc('month', now())"
+        description: Transitions recorded since the start of the current month.
+      - name: last_30_days
+        sql: "{CUBE}.created_at >= now() - interval '30 days'"
+        description: Transitions recorded in the last 30 days.
+
+    measures:
+      - name: count
+        type: count
+        description: Number of status transitions across both stages (NOT number of cases).
+
+      - name: avg_turnaround_hours
+        sql: "EXTRACT(EPOCH FROM {CUBE}.turn_around_time) / 3600.0"
+        type: avg
+        description: Average OVERALL turn-around time per transition (both stages), in hours.
+
+      - name: avg_turnaround_days
+        sql: "EXTRACT(EPOCH FROM {CUBE}.turn_around_time) / 86400.0"
+        type: avg
+        description: Average overall turn-around time per transition, in days.
+
+      - name: max_turnaround_hours
+        sql: "EXTRACT(EPOCH FROM {CUBE}.turn_around_time) / 3600.0"
+        type: max
+        description: Longest turn-around time across both stages, in hours.
+
+      - name: min_turnaround_hours
+        sql: "EXTRACT(EPOCH FROM {CUBE}.turn_around_time) / 3600.0"
+        type: min
+        description: Shortest turn-around time across both stages, in hours.
