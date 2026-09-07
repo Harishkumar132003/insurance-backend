@@ -65,8 +65,8 @@ DECLARE
     -- tenant-owned (RLS applied below)
     'hospitals','users','hospitalization','cc_emails','execution_logs',
     'hospital_configs','hospital_prompts','hospital_provider_mappings',
-    'pre_auth','pre_auth_patient','pre_auth_stay','pre_auth_treatment',
-    'claims','settlements','settlement_batch','settlement_item',
+    'pre_auth','patient_personal_detail','pre_auth_stay','pre_auth_treatment',
+    'claims','settlement_batch','settlement_item',
     'invoice','invoice_payment','status_history',
     'query_logs','claim_case_emails','claim_case_email_attachments',
     'claim_case_documents','part_d_letters','claim_bill_item',
@@ -108,14 +108,21 @@ DECLARE
     'hospital_configs','hospital_prompts','hospital_provider_mappings',
     'settlement_batch'
   ];
-  -- Tier 1: claim_case_id -> hospitalization.hospital_id
+  -- Tier 1a: claim_case_id -> hospitalization.hospital_id
+  --   These tables kept the claim_case_id name.
   via_case text[] := ARRAY[
-    'pre_auth','claims','status_history','query_logs','claim_case_emails',
+    'status_history','query_logs','claim_case_emails',
     'claim_case_email_attachments','claim_case_documents','part_d_letters','invoice'
+  ];
+  -- Tier 1b: hospitalization_id -> hospitalization.hospital_id
+  --   Renamed tables, plus claim_bill_item which is now anchored on the case
+  --   rather than on a form row.
+  via_hosp text[] := ARRAY[
+    'pre_auth','claims','claim_bill_item'
   ];
   -- Tier 2: form_data_id -> pre_auth -> hospitalization
   via_form text[] := ARRAY[
-    'claim_bill_item','pre_auth_patient','pre_auth_stay','pre_auth_treatment'
+    'patient_personal_detail','pre_auth_stay','pre_auth_treatment'
   ];
   t text;
   pred text;
@@ -140,21 +147,22 @@ BEGIN
     EXECUTE format('CREATE POLICY ai_ro_tenant ON public.%I FOR SELECT TO oasys_ai_ro USING (%s)', t, pred);
   END LOOP;
 
+  FOREACH t IN ARRAY via_hosp LOOP
+    pred := 'hospitalization_id IN (SELECT id FROM public.hospitalization WHERE hospital_id = public.oasys_current_hospital())';
+    EXECUTE format('ALTER TABLE public.%I ENABLE ROW LEVEL SECURITY', t);
+    EXECUTE format('DROP POLICY IF EXISTS ai_ro_tenant ON public.%I', t);
+    EXECUTE format('CREATE POLICY ai_ro_tenant ON public.%I FOR SELECT TO oasys_ai_ro USING (%s)', t, pred);
+  END LOOP;
+
   FOREACH t IN ARRAY via_form LOOP
-    pred := 'form_data_id IN (SELECT pa.id FROM public.pre_auth pa JOIN public.hospitalization h ON h.id = pa.claim_case_id WHERE h.hospital_id = public.oasys_current_hospital())';
+    pred := 'form_data_id IN (SELECT pa.id FROM public.pre_auth pa JOIN public.hospitalization h ON h.id = pa.hospitalization_id WHERE h.hospital_id = public.oasys_current_hospital())';
     EXECUTE format('ALTER TABLE public.%I ENABLE ROW LEVEL SECURITY', t);
     EXECUTE format('DROP POLICY IF EXISTS ai_ro_tenant ON public.%I', t);
     EXECUTE format('CREATE POLICY ai_ro_tenant ON public.%I FOR SELECT TO oasys_ai_ro USING (%s)', t, pred);
   END LOOP;
 
   -- Tier 3: deeper chains
-  -- settlements -> claims.claim_case_id -> hospitalization
-  EXECUTE 'ALTER TABLE public.settlements ENABLE ROW LEVEL SECURITY';
-  EXECUTE 'DROP POLICY IF EXISTS ai_ro_tenant ON public.settlements';
-  EXECUTE 'CREATE POLICY ai_ro_tenant ON public.settlements FOR SELECT TO oasys_ai_ro
-           USING (claim_id IN (SELECT c.id FROM public.claims c
-                               JOIN public.hospitalization h ON h.id = c.claim_case_id
-                               WHERE h.hospital_id = public.oasys_current_hospital()))';
+  -- (the `settlements` table was dropped; settlement_item is covered above)
 
   -- invoice_payment -> invoice.claim_case_id -> hospitalization
   EXECUTE 'ALTER TABLE public.invoice_payment ENABLE ROW LEVEL SECURITY';

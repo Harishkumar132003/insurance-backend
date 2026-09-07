@@ -33,17 +33,29 @@ BEGIN
 END $$;
 -- Child FKs auto-follow the rename (Postgres references parents by OID, not name).
 
--- 3. New columns on pre_auth (stage discriminator + claim-stage fields)
-ALTER TABLE pre_auth ADD COLUMN IF NOT EXISTS stage VARCHAR NOT NULL DEFAULT 'PRE_AUTH';
-ALTER TABLE pre_auth ADD COLUMN IF NOT EXISTS claimed_amount NUMERIC(12,2);
-ALTER TABLE pre_auth ADD COLUMN IF NOT EXISTS remarks TEXT;
+-- 3. pre_auth is always PRE_AUTH — there is no claim-stage form row. The claim
+--    lives on `claims` + `claim_bill_item` (anchored on the case), so the old
+--    stage / claimed_amount / remarks columns are deliberately NOT created.
+--    The case FK is named hospitalization_id (the ORM maps it to .claim_case_id).
+ALTER TABLE pre_auth DROP COLUMN IF EXISTS stage;
+ALTER TABLE pre_auth DROP COLUMN IF EXISTS claimed_amount;
+ALTER TABLE pre_auth DROP COLUMN IF EXISTS remarks;
+ALTER TABLE pre_auth DROP COLUMN IF EXISTS draft_state;
+DO $$
+BEGIN
+  IF EXISTS (SELECT 1 FROM information_schema.columns
+              WHERE table_schema='public' AND table_name='pre_auth'
+                AND column_name='claim_case_id') THEN
+    ALTER TABLE pre_auth RENAME COLUMN claim_case_id TO hospitalization_id;
+  END IF;
+END $$;
 
 -- 4. Drop the legacy data_json blob (no longer used; pre-auth + claim-stage
 --    data now live in typed tables/columns)
 ALTER TABLE pre_auth DROP COLUMN IF EXISTS data_json;
 
 -- 5. Structured pre-auth section tables (1:1 with the pre_auth row)
-CREATE TABLE IF NOT EXISTS pre_auth_patient (
+CREATE TABLE IF NOT EXISTS patient_personal_detail (
     id                       BIGSERIAL PRIMARY KEY,
     form_data_id             BIGINT NOT NULL UNIQUE
                               REFERENCES pre_auth(id) ON DELETE CASCADE,
@@ -67,8 +79,8 @@ CREATE TABLE IF NOT EXISTS pre_auth_patient (
     relative_contact_number  TEXT,
     created_at               TIMESTAMPTZ NOT NULL DEFAULT now()
 );
-CREATE INDEX IF NOT EXISTS ix_pre_auth_patient_form_data_id
-  ON pre_auth_patient(form_data_id);
+CREATE INDEX IF NOT EXISTS ix_patient_personal_detail_form_data_id
+  ON patient_personal_detail(form_data_id);
 
 CREATE TABLE IF NOT EXISTS pre_auth_treatment (
     id                      BIGSERIAL PRIMARY KEY,
@@ -149,17 +161,22 @@ CREATE TABLE IF NOT EXISTS pre_auth_stay (
 CREATE INDEX IF NOT EXISTS ix_pre_auth_stay_form_data_id
   ON pre_auth_stay(form_data_id);
 
--- 6. Claim-stage bill-breakdown line items
+-- 6. Claim bill-breakdown line items, anchored on the CASE (there is no
+--    claim-stage pre_auth row to hang them off).
 CREATE TABLE IF NOT EXISTS claim_bill_item (
-    id           BIGSERIAL PRIMARY KEY,
-    form_data_id BIGINT NOT NULL REFERENCES pre_auth(id) ON DELETE CASCADE,
-    label        TEXT NOT NULL,
-    amount       NUMERIC(12,2) NOT NULL,
-    sort_order   INTEGER NOT NULL DEFAULT 0,
-    created_at   TIMESTAMPTZ NOT NULL DEFAULT now()
+    id                 BIGSERIAL PRIMARY KEY,
+    hospitalization_id UUID NOT NULL
+                         REFERENCES hospitalization(id) ON DELETE CASCADE,
+    label              TEXT NOT NULL,
+    amount             NUMERIC(12,2) NOT NULL,
+    -- Per-day lines carry rate/days; NULL on flat lines.
+    rate               NUMERIC(12,2),
+    days               INTEGER,
+    sort_order         INTEGER NOT NULL DEFAULT 0,
+    created_at         TIMESTAMPTZ NOT NULL DEFAULT now()
 );
-CREATE INDEX IF NOT EXISTS ix_claim_bill_item_form_data_id
-  ON claim_bill_item(form_data_id);
+CREATE INDEX IF NOT EXISTS ix_claim_bill_item_hospitalization_id
+  ON claim_bill_item(hospitalization_id);
 
 -- 7. Invoice (one per case; raised after a claim is approved). Status is
 --    auto-derived from payments (PAID / PARTIALLY_PAID / UNPAID).

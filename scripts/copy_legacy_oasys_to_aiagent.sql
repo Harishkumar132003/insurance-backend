@@ -20,7 +20,7 @@
 -- ------------------------------------------------------------
 -- Five aiagent tables have no direct counterpart on the server:
 --
---   patient_personal_detail   <- pre_auth_patient (table was renamed later)
+--   patient_personal_detail   <- patient_personal_detail (table was renamed later)
 --   preauth_status_tracking   <- status_history WHERE stage = 'PRE_AUTH'
 --   claim_status_tracking     <- status_history WHERE stage = 'CLAIM'
 --
@@ -169,19 +169,19 @@ INSERT INTO pre_auth (id, created_at, updated_at, hospitalization_id, preauth_st
                       preauth_raised_amount, preauth_approved_amount, hospital_id)
 SELECT * FROM dblink(:'src', $q$
   SELECT p.id, p.created_at, p.updated_at,
-         p.claim_case_id AS hospitalization_id,
+         p.hospitalization_id,
          p.preauth_status,
          s.total_cost    AS preauth_raised_amount,
          CASE WHEN p.stage = 'PRE_AUTH' THEN h.approved_amount END AS preauth_approved_amount,
          h.hospital_id
   FROM public.pre_auth p
-  JOIN public.hospitalization h ON h.id = p.claim_case_id
+  JOIN public.hospitalization h ON h.id = p.hospitalization_id
   LEFT JOIN public.pre_auth_stay s ON s.form_data_id = p.id
 $q$) AS t(id bigint, created_at timestamptz, updated_at timestamptz, hospitalization_id uuid,
           preauth_status varchar, preauth_raised_amount numeric(12,2),
           preauth_approved_amount numeric(12,2), hospital_id uuid);
 
--- ---- 7. patient_personal_detail  (source table: pre_auth_patient) ----------
+-- ---- 7. patient_personal_detail  (source table: patient_personal_detail) ----------
 INSERT INTO patient_personal_detail (id, form_data_id, patient_name, gender, address, age_years,
                                      occupation, employee_id, date_of_birth, policy_number,
                                      contact_number, corporate_name, insured_card_id,
@@ -196,9 +196,9 @@ SELECT * FROM dblink(:'src', $q$
          pp.family_physician_name, pp.family_physician_contact, pp.other_insurance_company,
          pp.other_insurance_details, pp.relative_contact_number, pp.created_at,
          h.id AS hospitalization_id, h.uhid
-  FROM public.pre_auth_patient pp
+  FROM public.patient_personal_detail pp
   JOIN public.pre_auth p ON p.id = pp.form_data_id
-  JOIN public.hospitalization h ON h.id = p.claim_case_id
+  JOIN public.hospitalization h ON h.id = p.hospitalization_id
 $q$) AS t(id bigint, form_data_id bigint, patient_name text, gender text, address text,
           age_years integer, occupation text, employee_id text, date_of_birth date,
           policy_number text, contact_number text, corporate_name text, insured_card_id text,
@@ -214,10 +214,10 @@ SELECT * FROM dblink(:'src', $q$
   SELECT c.id, c.claimed_amount, c.approved_amount,
          CASE WHEN c.status LIKE 'CLAIM\_%' THEN c.status ELSE 'CLAIM_' || c.status END,
          c.submitted_at, c.processed_at, c.created_at,
-         c.claim_case_id AS hospitalization_id,
+         c.hospitalization_id,
          h.uhid, h.claim_number, h.hospital_id
   FROM public.claims c
-  JOIN public.hospitalization h ON h.id = c.claim_case_id
+  JOIN public.hospitalization h ON h.id = c.hospitalization_id
 $q$) AS t(id bigint, claimed_amount numeric(12,2), approved_amount numeric(12,2),
           status varchar, submitted_at timestamptz, processed_at timestamptz,
           created_at timestamptz, hospitalization_id uuid, uhid varchar, claim_number varchar,
@@ -236,7 +236,7 @@ SELECT hospitalization_id, uhid, from_status, to_status, tat, public.format_tat(
        remark, created_at, email_id, hospital_id
 FROM dblink(:'src', $q$
   SELECT * FROM (
-    SELECT sh.claim_case_id AS hospitalization_id,
+    SELECT sh.hospitalization_id,
            h.uhid, h.hospital_id,
            LAG(sh.status) OVER w AS from_status,
            sh.status              AS to_status,
@@ -264,7 +264,7 @@ INSERT INTO claim_status_tracking (hospitalization_id, uhid, claim_number, from_
 SELECT hospitalization_id, uhid, claim_number, from_status, to_status, tat,
        public.format_tat(tat), docs, remark, created_at, email_id, hospital_id
 FROM dblink(:'src', $q$
-  SELECT sh.claim_case_id AS hospitalization_id,
+  SELECT sh.hospitalization_id,
          h.uhid, h.claim_number, h.hospital_id,
          LAG(CASE WHEN sh.status LIKE 'CLAIM\_%' THEN sh.status
                   ELSE 'CLAIM_' || sh.status END) OVER w AS from_status,
@@ -325,10 +325,10 @@ SELECT id, batch_id, claim_number, settled_amount, claim_raised_amount, disallow
 FROM dblink(:'src', $q$
   SELECT si.id, si.batch_id, si.claim_number, si.settled_amount, si.claim_raised_amount,
          si.disallowance, si.disallowance_reason,
-         si.claim_case_id AS hospitalization_id, si.is_matched, si.created_at,
+         si.hospitalization_id, si.is_matched, si.created_at,
          h.hospital_id, h.uhid
   FROM public.settlement_item si
-  JOIN public.hospitalization h ON h.id = si.claim_case_id
+  JOIN public.hospitalization h ON h.id = si.hospitalization_id
 $q$) AS t(id bigint, batch_id uuid, claim_number varchar, settled_amount numeric(14,2),
           claim_raised_amount numeric(14,2), disallowance numeric(14,2),
           disallowance_reason varchar, hospitalization_id uuid, is_matched boolean,

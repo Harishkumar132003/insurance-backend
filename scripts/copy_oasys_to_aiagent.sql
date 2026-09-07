@@ -20,11 +20,10 @@
 --
 -- SCHEMA NOTE — why three tables need a column alias:
 --   `oasys` sits at alembic c5e9a2b6d3f8, before the three
---   rename_*_claim_case_id migrations that head (c6e0f4a8b2d5) applies. So the
---   source still calls the case FK `claim_case_id` where `aiagent` calls it
---   `hospitalization_id`. Same uuid values — only the name differs, and
---   `SELECT claim_case_id AS hospitalization_id` bridges it. Running those
---   migrations on the app DB is NOT required for this copy.
+--   Both databases now use `hospitalization_id` — the merged branch applied
+--   the renames to the source, so the old `SELECT claim_case_id AS
+--   hospitalization_id` bridges have been removed. status_history and
+--   claim_case_emails keep `claim_case_id` in BOTH schemas.
 --   The other 9 tables are column-identical.
 --
 -- The 3 views (revenue_lifecycle, preauth_operations, claims_operations) read
@@ -131,7 +130,7 @@ $q$) AS t(id bigint, direction varchar, from_email varchar, to_email varchar, su
 INSERT INTO pre_auth (id, created_at, updated_at, hospitalization_id, preauth_status,
                       preauth_raised_amount, preauth_approved_amount, hospital_id)
 SELECT * FROM dblink(:'src', $q$
-  SELECT id, created_at, updated_at, claim_case_id AS hospitalization_id, preauth_status,
+  SELECT id, created_at, updated_at, hospitalization_id, preauth_status,
          preauth_raised_amount, preauth_approved_amount, hospital_id
   FROM public.pre_auth
 $q$) AS t(id bigint, created_at timestamptz, updated_at timestamptz, hospitalization_id uuid,
@@ -166,7 +165,7 @@ INSERT INTO claims (id, claimed_amount, approved_amount, status, submitted_at, p
                     created_at, hospitalization_id, uhid, claim_number, hospital_id)
 SELECT * FROM dblink(:'src', $q$
   SELECT id, claimed_amount, approved_amount, status, submitted_at, processed_at, created_at,
-         claim_case_id AS hospitalization_id, uhid, claim_number, hospital_id
+         hospitalization_id, uhid, claim_number, hospital_id
   FROM public.claims
 $q$) AS t(id bigint, claimed_amount numeric(12,2), approved_amount numeric(12,2),
           status varchar, submitted_at timestamptz, processed_at timestamptz,
@@ -231,7 +230,7 @@ SELECT id, batch_id, claim_number, settled_amount, claim_raised_amount, disallow
        disallowance_reason, hospitalization_id, is_matched, created_at, hospital_id, uhid, NULL
 FROM dblink(:'src', $q$
   SELECT id, batch_id, claim_number, settled_amount, claim_raised_amount, disallowance,
-         disallowance_reason, claim_case_id AS hospitalization_id, is_matched, created_at,
+         disallowance_reason, hospitalization_id, is_matched, created_at,
          hospital_id, uhid
   FROM public.settlement_item
 $q$) AS t(id bigint, batch_id uuid, claim_number varchar, settled_amount numeric(14,2),
