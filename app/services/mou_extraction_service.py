@@ -1,9 +1,10 @@
-"""Extract room/ICU/OT charges from an uploaded MOU document.
+"""Extract room/ICU/OT charges and the covered diagnosis list from an uploaded MOU.
 
 Provider identity (name, TPA fields, email) is typed by the admin — only the
-charge schedule is parsed here. Returns the charges shape the onboarding form
-renders as editable rows:
-    {"room_type": [{"room": "NICU", "per_day_rent": 15000}], "icu": 3000, "ot_charge": 3000}
+charge schedule and diagnosis list are parsed here. Returns the shape the
+onboarding form renders as editable rows:
+    {"room_type": [{"room": "NICU", "per_day_rent": 15000}], "icu": 3000,
+     "ot_charge": 3000, "diagnoses": [{"name": "Acute Appendicitis"}]}
 """
 import io
 import json
@@ -23,7 +24,7 @@ _CHARGES_SCHEMA = {
     "schema": {
         "type": "object",
         "additionalProperties": False,
-        "required": ["room_type", "icu", "ot_charge"],
+        "required": ["room_type", "icu", "ot_charge", "diagnoses"],
         "properties": {
             "room_type": {
                 "type": "array",
@@ -39,6 +40,17 @@ _CHARGES_SCHEMA = {
             },
             "icu": {"type": ["number", "null"]},
             "ot_charge": {"type": ["number", "null"]},
+            "diagnoses": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "additionalProperties": False,
+                    "required": ["name"],
+                    "properties": {
+                        "name": {"type": "string"},
+                    },
+                },
+            },
         },
     },
 }
@@ -53,8 +65,14 @@ Extract the agreed tariff. Return ONE JSON object:
   category is listed without a rate.
 - `icu`: the ICU per-day charge as a number, or null if not stated.
 - `ot_charge`: the operation-theatre charge as a number, or null if not stated.
+- `diagnoses`: a list of {{name}} for each medical condition, procedure, surgery or
+  treatment package the MOU names as covered (e.g. "Acute Appendicitis", "LSCS",
+  "Cataract - Phacoemulsification", "Total Knee Replacement"). Use the wording the
+  document itself uses, trimmed of list numbering, package codes and rates. One
+  entry per condition or procedure — do not merge several into one string.
 
-Only include rooms actually present in the document. Do not invent categories.
+Only include rooms and diagnoses actually present in the document. Do not invent
+categories. Return an empty list if the document names none.
 
 MOU text:
 {text}
@@ -80,7 +98,7 @@ def _extract_pdf_text(file_bytes: bytes, file_name: str | None, content_type: st
 
 
 def _empty() -> dict:
-    return {"room_type": [], "icu": None, "ot_charge": None}
+    return {"room_type": [], "icu": None, "ot_charge": None, "diagnoses": []}
 
 
 def extract_mou_data(file_bytes: bytes, file_name: str | None, content_type: str | None) -> dict:
@@ -105,6 +123,9 @@ def extract_mou_data(file_bytes: bytes, file_name: str | None, content_type: str
         rooms = data.get("room_type") or []
         if not isinstance(rooms, list):
             rooms = []
+        diagnoses = data.get("diagnoses") or []
+        if not isinstance(diagnoses, list):
+            diagnoses = []
         return {
             "room_type": [
                 {"room": str(r.get("room", "")).strip(), "per_day_rent": r.get("per_day_rent")}
@@ -113,6 +134,11 @@ def extract_mou_data(file_bytes: bytes, file_name: str | None, content_type: str
             ],
             "icu": data.get("icu"),
             "ot_charge": data.get("ot_charge"),
+            "diagnoses": [
+                {"name": str(d.get("name", "")).strip()}
+                for d in diagnoses
+                if isinstance(d, dict) and str(d.get("name", "")).strip()
+            ],
         }
     except Exception as e:
         logger.error(f"MOU extraction failed: {e}")

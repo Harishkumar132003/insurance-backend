@@ -107,6 +107,12 @@ _INVESTIGATION_KEYS = (
     "investigation_category", "investigation_name", "investigation_description",
 )
 
+# One Cost Estimates row. `key` is the cost head it maps onto (a _HOSP_COSTS
+# name, or "investigation" for a per-investigation row); `label` is what the
+# user saw in the Expense Category column; `amount` is a per-day rate for
+# room_rent / icu_charges and a flat amount otherwise.
+_COST_ITEM_KEYS = ("key", "label", "description", "amount")
+
 
 def _clean_str_list(raw) -> list[str]:
     """Normalise a multi-value code field to a de-duplicated list of non-empty
@@ -171,6 +177,28 @@ def _clean_investigations(raw) -> list[dict]:
             for k in _INVESTIGATION_KEYS
         }
         if all(v is None for v in cleaned.values()):
+            continue
+        out.append(cleaned)
+    return out
+
+
+def _clean_cost_items(raw) -> list[dict]:
+    """Normalise the Cost Estimates table to a list of four-key dicts, order
+    preserved. A row with no key and no amount is dropped; `amount` is coerced
+    to a number so the stored array agrees with the scalar cost columns."""
+    if not isinstance(raw, list):
+        return []
+    out: list[dict] = []
+    for item in raw:
+        if not isinstance(item, dict):
+            continue
+        cleaned = {
+            k: (item.get(k) if item.get(k) not in ("",) else None)
+            for k in _COST_ITEM_KEYS
+        }
+        cleaned["amount"] = _num(item.get("amount"))
+        # A row the user added but never filled in carries no information.
+        if not cleaned["key"] and cleaned["amount"] is None:
             continue
         out.append(cleaned)
     return out
@@ -260,6 +288,12 @@ def apply_sections(db: Session, form_data: FormData, sections: dict) -> None:
             for f in _HOSP_COSTS:
                 if f in costs:
                     setattr(row, f, _num(costs.get(f)))
+        # The Cost Estimates table. Replaced wholesale like `investigations` /
+        # `treatments`, and only when the client sent it, so a partial update of
+        # the section leaves the saved rows alone. The scalar cost columns above
+        # are the flat mirror of these rows and are derived client-side.
+        if "cost_items" in h:
+            row.cost_items = _clean_cost_items(h.get("cost_items"))
         # Derived room costs: room_rent and icu_charges are per-day rates;
         # room_rent applies to non-ICU days, icu_charges to ICU days. Computed from
         # the row (post-setattr) so it stays consistent on partial edits too.
@@ -368,6 +402,10 @@ def compose_sections(form_data: FormData) -> dict:
                 "room_rent_total": _num(h.room_rent_total),
                 "icu_charges_total": _num(h.icu_charges_total),
             },
+            # Sits beside `costs`, not inside it: the Part C flatteners spread
+            # subgroup objects into a flat namespace, and a section-level array
+            # is skipped there rather than polluting it.
+            "cost_items": h.cost_items or [],
             "chronic_conditions": {
                 "diabetes": h.cc_diabetes,
                 "hypertension": h.cc_hypertension,

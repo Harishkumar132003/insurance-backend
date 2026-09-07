@@ -128,6 +128,12 @@ CREATE TABLE IF NOT EXISTS pre_auth_stay (
     package_charges       NUMERIC(12,2),
     other_expenses        NUMERIC(12,2),
     total_cost            NUMERIC(12,2),
+    -- Server-derived per-day room totals (rate * days).
+    room_rent_total       NUMERIC(12,2),
+    icu_charges_total     NUMERIC(12,2),
+    -- Cost Estimates table: ordered array of {key, label, description, amount}.
+    -- The scalar columns above are its flat mirror.
+    cost_items            JSONB,
     -- chronic_conditions.*
     cc_diabetes           BOOLEAN,
     cc_hypertension       BOOLEAN,

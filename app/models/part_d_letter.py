@@ -1,5 +1,5 @@
 from sqlalchemy import Column, BigInteger, Numeric, String, Text, DateTime, ForeignKey, Index, func, text
-from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import relationship
 
 from app.db.base import Base
@@ -60,6 +60,12 @@ class PartDLetter(Base):
     bd_medicines_cost = Column(Numeric(12, 2), nullable=True)
     bd_package_charges = Column(Numeric(12, 2), nullable=True)
     bd_other_expenses = Column(Numeric(12, 2), nullable=True)
+    # The breakdown as the provider actually reviewed it: an ordered JSONB array
+    # of {key, label, description, claimed, amount}, one entry per line the
+    # hospital claimed (so two named investigations stay two rows). Variable
+    # length, hence not typed columns. The bd_* scalars above remain the flat
+    # mirror — the letter template and buildFlatArgs() read those, not this.
+    bd_items = Column(JSONB, nullable=True)
 
     # ── Numeric authorisation summary (computed in the modal, stored here) ──
     # total_authorised == approved_amount (the canonical figure).

@@ -38,6 +38,10 @@ class PartDLetterFields(BaseModel):
     bd_medicines_cost: float | None = None
     bd_package_charges: float | None = None
     bd_other_expenses: float | None = None
+    # Per-line breakdown; see PartDLetter.bd_items. Listing it here is what puts
+    # it in PART_D_FIELD_NAMES, which is the route's allow-list and the
+    # controller's setattr loop — no other backend change is needed.
+    bd_items: list[dict] | None = None
     # ── Numeric authorisation summary (computed in the modal) ──
     as_total_bill_amount: float | None = None
     as_discount: float | None = None

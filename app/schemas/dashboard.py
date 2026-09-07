@@ -17,8 +17,13 @@ class DashboardKPIs(BaseModel):
     awaiting_insurer_avg_wait_seconds: float | None = None
     outstanding_receivables_amount: float = 0.0
     outstanding_receivables_count: int = 0
-    approved_this_month_count: int = 0
-    approved_this_month_amount: float = 0.0
+    # Cases cancelled in the period, dated by when the cancellation happened —
+    # the same anchor `cancellation_reasons` uses, so the card is the headline
+    # for that panel.
+    cancelled_count: int = 0
+    # Denominator for the cancelled share: cases created in the period,
+    # cancelled ones included.
+    total_cases_in_period: int = 0
 
 
 class FunnelStep(BaseModel):

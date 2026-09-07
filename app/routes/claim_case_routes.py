@@ -1,3 +1,4 @@
+import json
 from typing import List
 from uuid import UUID
 
@@ -240,6 +241,28 @@ async def put_part_d(
                 email_id = int(body["email_id"])
             except (TypeError, ValueError):
                 raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="email_id must be an integer")
+
+    # bd_items is a JSONB list. Over multipart every value arrives as a string,
+    # so without this it would be stored as a JSON *string* rather than a list
+    # and read back unusable. Mirrors the approved_breakdown parsing above.
+    if isinstance(fields.get("bd_items"), str):
+        raw_items = fields["bd_items"].strip()
+        if not raw_items:
+            fields["bd_items"] = None
+        else:
+            try:
+                parsed_items = json.loads(raw_items)
+            except (TypeError, ValueError):
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="bd_items must be a JSON array",
+                )
+            if not isinstance(parsed_items, list):
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="bd_items must be a JSON array",
+                )
+            fields["bd_items"] = parsed_items
 
     # Coerce approved_amount to float if it came through as a form string.
     if "approved_amount" in fields and fields["approved_amount"] not in (None, ""):

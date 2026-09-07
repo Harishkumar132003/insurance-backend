@@ -10,16 +10,24 @@ class RoomCharge(BaseModel):
     per_day_rent: float | None = None
 
 
+class MouDiagnosis(BaseModel):
+    """One condition/procedure the MOU covers. An object rather than a bare
+    string so an ICD code can be added later without rewriting stored rows."""
+    name: str
+
+
 class RoomChargesData(BaseModel):
     room_type: list[RoomCharge] = []
     icu: float | None = None
     ot_charge: float | None = None
+    diagnoses: list[MouDiagnosis] = []
 
 
 class MouExtractResponse(BaseModel):
     room_type: list[RoomCharge] = []
     icu: float | None = None
     ot_charge: float | None = None
+    diagnoses: list[MouDiagnosis] = []
 
 
 class HospitalProviderResponse(BaseModel):

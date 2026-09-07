@@ -1,4 +1,5 @@
 from sqlalchemy import Column, BigInteger, String, Integer, Boolean, Date, Numeric, DateTime, ForeignKey, Index, func
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import relationship
 
 from app.db.base import Base
@@ -38,6 +39,12 @@ class PreAuthHospitalization(Base):
     #   icu_charges_total = icu_charges (per day) * ICU days
     room_rent_total = Column(Numeric(12, 2), nullable=True)
     icu_charges_total = Column(Numeric(12, 2), nullable=True)
+    # The Cost Estimates table as the user built it: an ordered JSONB array of
+    # {key, label, description, amount}. Variable length (investigations become
+    # their own rows), so it can't be typed columns. The scalar cost columns
+    # above stay in sync as a flat mirror — Part C/D printing, the dashboard
+    # funnel and the approval caps all read those, not this.
+    cost_items = Column(JSONB, nullable=True)
 
     # chronic_conditions.*
     cc_diabetes = Column(Boolean, nullable=True)

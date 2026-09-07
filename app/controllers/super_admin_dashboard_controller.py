@@ -126,17 +126,28 @@ def _kpis(db: Session, params: dict) -> SuperAdminKPIs:
         "denied_statuses": list(DENIED_STATUSES),
     }).mappings().first()
 
-    # Outstanding receivables — current snapshot across the whole platform
-    # (every unpaid invoice), independent of the date window.
+    # Outstanding receivables — approved claim money not yet settled by the
+    # insurer, current snapshot across the whole platform and independent of the
+    # date window. Same definition as the hospital-admin KPI.
     receivables = db.execute(text("""
-        SELECT COUNT(i.id) AS invoice_count,
-               COALESCE(SUM(i.insurer_amount - COALESCE(p.paid, 0)), 0) AS outstanding
-          FROM invoice i
-          LEFT JOIN (
-            SELECT invoice_id, SUM(amount) AS paid
-              FROM invoice_payment GROUP BY invoice_id
-          ) p ON p.invoice_id = i.id
-         WHERE i.status <> 'PAID'
+        WITH per_case AS (
+            SELECT h.id,
+                   SUM(cl.approved_amount) AS approved,
+                   COALESCE((
+                       SELECT SUM(si.settled_amount)
+                         FROM settlement_item si
+                        WHERE si.claim_case_id = h.id
+                   ), 0) AS settled
+              FROM hospitalization h
+              JOIN claims cl ON cl.claim_case_id = h.id
+             WHERE h.case_status <> 'CANCELLED'
+               AND cl.approved_amount IS NOT NULL AND cl.approved_amount > 0
+             GROUP BY h.id
+        )
+        SELECT COUNT(*) AS case_count,
+               COALESCE(SUM(approved - settled), 0) AS outstanding
+          FROM per_case
+         WHERE approved > settled
     """)).mappings().first()
 
     decided = (decisions["approved"] or 0) + (decisions["denied"] or 0)
@@ -151,7 +162,7 @@ def _kpis(db: Session, params: dict) -> SuperAdminKPIs:
         approved_amount=float(decisions["approved_amount"] or 0),
         approval_rate=(decisions["approved"] / decided) if decided else None,
         outstanding_receivables_amount=float(receivables["outstanding"] or 0),
-        outstanding_receivables_count=receivables["invoice_count"] or 0,
+        outstanding_receivables_count=receivables["case_count"] or 0,
     )
 
 
@@ -244,35 +255,29 @@ def _funnel(db: Session, params: dict) -> list[FunnelStep]:
               JOIN claims cl ON cl.claim_case_id = c.id
              WHERE cl.approved_amount IS NOT NULL AND cl.approved_amount > 0
         ),
-        invoiced AS (
-            SELECT COUNT(*) AS cnt,
-                   COALESCE(SUM(i.insurer_amount), 0) AS amt
+        settled AS (
+            -- Real money received, from the insurer's remittance advice.
+            SELECT COUNT(DISTINCT si.claim_case_id) AS cnt,
+                   COALESCE(SUM(si.settled_amount), 0) AS amt
               FROM cases c
-              JOIN invoice i ON i.claim_case_id = c.id
-        ),
-        paid AS (
-            SELECT COUNT(DISTINCT i.id) AS cnt,
-                   COALESCE(SUM(p.amount), 0)         AS amt
-              FROM cases c
-              JOIN invoice i ON i.claim_case_id = c.id
-              JOIN invoice_payment p ON p.invoice_id = i.id
+              JOIN settlement_item si ON si.claim_case_id = c.id
         )
         SELECT requested.cnt       AS req_c, requested.amt       AS req_a,
                approved.cnt        AS app_c, approved.amt        AS app_a,
                claimed.cnt         AS cla_c, claimed.amt         AS cla_a,
                claim_approved.cnt  AS cap_c, claim_approved.amt  AS cap_a,
-               invoiced.cnt        AS inv_c, invoiced.amt        AS inv_a,
-               paid.cnt            AS pay_c, paid.amt            AS pay_a
-          FROM requested, approved, claimed, claim_approved, invoiced, paid
+               settled.cnt         AS set_c, settled.amt         AS set_a
+          FROM requested, approved, claimed, claim_approved, settled
     """), params).mappings().first()
 
+    # "Invoiced" is gone: it was never a stage in the insurer's world, only an
+    # internal record the hospital typed in after the fact.
     steps = [
         ("requested", "Requested", row["req_a"], row["req_c"]),
         ("approved", "Pre-Auth Approved", row["app_a"], row["app_c"]),
         ("claimed", "Claim Raised", row["cla_a"], row["cla_c"]),
         ("claim_approved", "Claim Approved", row["cap_a"], row["cap_c"]),
-        ("invoiced", "Invoiced", row["inv_a"], row["inv_c"]),
-        ("paid", "Settled", row["pay_a"], row["pay_c"]),
+        ("settled", "Settled", row["set_a"], row["set_c"]),
     ]
     return [
         FunnelStep(key=k, label=l, amount=float(a or 0), count=int(c or 0))
@@ -322,16 +327,24 @@ def _hospitals(db: Session, params: dict) -> list[HospitalStats]:
              GROUP BY c.hospital_id
         ),
         outstanding AS (
-            SELECT h.hospital_id,
-                   COALESCE(SUM(i.insurer_amount - COALESCE(p.paid, 0)), 0) AS amt
-              FROM hospitalization h
-              JOIN invoice i ON i.claim_case_id = h.id
-              LEFT JOIN (
-                   SELECT invoice_id, SUM(amount) AS paid
-                     FROM invoice_payment GROUP BY invoice_id
-              ) p ON p.invoice_id = i.id
-             WHERE i.status <> 'PAID'
-             GROUP BY h.hospital_id
+            -- Approved claim money not yet settled. Same definition as the KPI.
+            SELECT hospital_id, COALESCE(SUM(approved - settled), 0) AS amt
+              FROM (
+                SELECT h.hospital_id, h.id,
+                       SUM(cl.approved_amount) AS approved,
+                       COALESCE((
+                           SELECT SUM(si.settled_amount)
+                             FROM settlement_item si
+                            WHERE si.claim_case_id = h.id
+                       ), 0) AS settled
+                  FROM hospitalization h
+                  JOIN claims cl ON cl.claim_case_id = h.id
+                 WHERE h.case_status <> 'CANCELLED'
+                   AND cl.approved_amount IS NOT NULL AND cl.approved_amount > 0
+                 GROUP BY h.hospital_id, h.id
+              ) per_case
+             WHERE approved > settled
+             GROUP BY hospital_id
         ),
         counts AS (
             SELECT hospital_id, COUNT(*) AS cases FROM cases GROUP BY hospital_id
@@ -410,16 +423,24 @@ def _providers(db: Session, params: dict) -> list[ProviderStats]:
              GROUP BY c.policy_provider_id
         ),
         outstanding AS (
-            SELECT h.policy_provider_id,
-                   COALESCE(SUM(i.insurer_amount - COALESCE(p.paid, 0)), 0) AS amt
-              FROM hospitalization h
-              JOIN invoice i ON i.claim_case_id = h.id
-              LEFT JOIN (
-                   SELECT invoice_id, SUM(amount) AS paid
-                     FROM invoice_payment GROUP BY invoice_id
-              ) p ON p.invoice_id = i.id
-             WHERE i.status <> 'PAID'
-             GROUP BY h.policy_provider_id
+            -- Approved claim money not yet settled. Same definition as the KPI.
+            SELECT policy_provider_id, COALESCE(SUM(approved - settled), 0) AS amt
+              FROM (
+                SELECT h.policy_provider_id, h.id,
+                       SUM(cl.approved_amount) AS approved,
+                       COALESCE((
+                           SELECT SUM(si.settled_amount)
+                             FROM settlement_item si
+                            WHERE si.claim_case_id = h.id
+                       ), 0) AS settled
+                  FROM hospitalization h
+                  JOIN claims cl ON cl.claim_case_id = h.id
+                 WHERE h.case_status <> 'CANCELLED'
+                   AND cl.approved_amount IS NOT NULL AND cl.approved_amount > 0
+                 GROUP BY h.policy_provider_id, h.id
+              ) per_case
+             WHERE approved > settled
+             GROUP BY policy_provider_id
         ),
         counts AS (
             SELECT policy_provider_id, COUNT(*) AS cases
@@ -481,12 +502,15 @@ def _status_distribution(db: Session) -> list[StatusBucket]:
             COUNT(*) FILTER (
                 WHERE EXISTS (SELECT 1 FROM claims c WHERE c.claim_case_id = h.id
                                 AND c.approved_amount IS NOT NULL AND c.approved_amount > 0)
-                  AND NOT EXISTS (SELECT 1 FROM invoice WHERE claim_case_id = h.id)
-            ) AS claim_approved_no_invoice,
+                  AND NOT EXISTS (SELECT 1 FROM settlement_item WHERE claim_case_id = h.id)
+            ) AS awaiting_settlement,
             COUNT(*) FILTER (
-                WHERE EXISTS (SELECT 1 FROM invoice i WHERE i.claim_case_id = h.id
-                                AND i.status <> 'PAID')
-            ) AS invoice_open
+                WHERE EXISTS (SELECT 1 FROM settlement_item si WHERE si.claim_case_id = h.id)
+                  AND (SELECT COALESCE(SUM(si.settled_amount), 0) FROM settlement_item si
+                        WHERE si.claim_case_id = h.id)
+                      < (SELECT COALESCE(SUM(c.approved_amount), 0) FROM claims c
+                          WHERE c.claim_case_id = h.id)
+            ) AS partially_settled
           FROM hospitalization h
          WHERE h.case_status <> 'CANCELLED'
     """)).mappings().first()
@@ -495,8 +519,8 @@ def _status_distribution(db: Session) -> list[StatusBucket]:
         StatusBucket(key="pre_auth_submitted", label="Pre-Auth Submitted",   count=row["pre_auth_submitted"] or 0),
         StatusBucket(key="pre_auth_approved",  label="Ready to Claim",       count=row["pre_auth_approved"] or 0),
         StatusBucket(key="claim_submitted",    label="Claim Submitted",      count=row["claim_submitted"] or 0),
-        StatusBucket(key="claim_approved",     label="Ready to Invoice",     count=row["claim_approved_no_invoice"] or 0),
-        StatusBucket(key="invoice_open",       label="Invoice Outstanding",  count=row["invoice_open"] or 0),
+        StatusBucket(key="awaiting_settlement", label="Awaiting Settlement", count=row["awaiting_settlement"] or 0),
+        StatusBucket(key="partially_settled",   label="Partially Settled",   count=row["partially_settled"] or 0),
     ]
 
 
@@ -521,12 +545,16 @@ def _volume_trend(db: Session, params: dict) -> list[VolumePoint]:
              GROUP BY 1
         ),
         settled AS (
-            SELECT date_trunc('week', i.updated_at)::date AS week_start,
-                   COUNT(*) AS n
-              FROM invoice i
-             WHERE i.status = 'PAID'
-               AND i.updated_at >= :since
-               AND i.updated_at <  :until
+            -- By the date the INSURER paid, not when the remittance was uploaded.
+            -- settlement_date lives on the batch: settlement_item does not carry
+            -- it on every deployed schema, so always reach it through the join.
+            SELECT date_trunc('week', sb.settlement_date)::date AS week_start,
+                   COUNT(DISTINCT si.claim_case_id) AS n
+              FROM settlement_item si
+              JOIN settlement_batch sb ON sb.id = si.batch_id
+             WHERE sb.settlement_date IS NOT NULL
+               AND sb.settlement_date >= :since
+               AND sb.settlement_date <  :until
              GROUP BY 1
         )
         SELECT s.week_start,

@@ -79,8 +79,11 @@ TABLE_DOCS: dict = {
         "cols": {
             "form_data_id": {"d": "FK -> pre_auth.id."},
             "total_cost": {"d": "Total REQUESTED / estimated pre-auth cost (money). Use for 'requested/estimated cost'."},
-            "room_rent": {"d": "Requested room rent."},
-            "icu_charges": {"d": "Requested ICU charges."},
+            "room_rent": {"d": "Requested room rent, per day (multiply by non-ICU days for the line total, or use room_rent_total)."},
+            "icu_charges": {"d": "Requested ICU charges, per day (multiply by icu_days, or use icu_charges_total)."},
+            "room_rent_total": {"d": "Server-derived room_rent * non-ICU days."},
+            "icu_charges_total": {"d": "Server-derived icu_charges * icu_days."},
+            "cost_items": {"d": "Cost Estimates table as JSONB: [{key, label, description, amount}]. The scalar cost columns are its flat mirror — prefer them for sums."},
             "admission_date": {"d": "Planned/actual admission date."},
             "room_type": {"d": "Room category requested."},
         },
@@ -166,7 +169,7 @@ TABLE_DOCS: dict = {
             "hospital_id": {"d": "FK -> hospitals.id."},
             "policy_provider_id": {"d": "FK -> policy_provider_configs.id (the insurer/TPA)."},
             "is_active": {"d": "Whether the empanelment is active.", "enum": ["true", "false"]},
-            "room_charges": {"d": "Agreed room-charge terms (JSON)."},
+            "room_charges": {"d": "Agreed MoU terms (JSON): room_type[] of {room, per_day_rent}, icu, ot_charge, and diagnoses[] of {name} — the conditions/procedures this insurer covers at this hospital."},
         },
     },
     "hospitals": {

@@ -56,6 +56,15 @@ def _run_migrations():
         # The repeatable Treatments group. Without this the array was dropped on
         # save and every reload rebuilt a single entry from the flat mirror.
         "ALTER TABLE pre_auth_treatment ADD COLUMN IF NOT EXISTS treatments JSONB",
+        # The Cost Estimates line-item table. The scalar cost columns beside it
+        # remain the flat mirror everything downstream reads. Listed here as
+        # well as in Alembic because create_all() adds tables, never columns.
+        "ALTER TABLE pre_auth_stay ADD COLUMN IF NOT EXISTS cost_items JSONB",
+        # Server-derived per-day room totals. Missing from deploy_schema.sql, so
+        # a database built from that script cannot write the hospitalization
+        # section at all until these exist.
+        "ALTER TABLE pre_auth_stay ADD COLUMN IF NOT EXISTS room_rent_total NUMERIC(12,2)",
+        "ALTER TABLE pre_auth_stay ADD COLUMN IF NOT EXISTS icu_charges_total NUMERIC(12,2)",
         # A case sheet can be several photographed pages, not just one PDF.
         "ALTER TABLE case_sheet_extraction ADD COLUMN IF NOT EXISTS files JSONB",
         # Backfill rows written before multi-file support from their scalar columns
@@ -110,6 +119,9 @@ def _run_migrations():
         "CREATE UNIQUE INDEX IF NOT EXISTS uq_part_d_letter_draft "
         "ON part_d_letters (claim_case_id) "
         "WHERE claim_case_email_id IS NULL",
+        # Per-line bill breakdown on the Part-D letter. The bd_* scalars beside
+        # it stay the flat mirror the printed letter reads.
+        "ALTER TABLE part_d_letters ADD COLUMN IF NOT EXISTS bd_items JSONB",
         # Invoice flow — move reference_id from invoice → invoice_payment,
         # and re-derive status from payments using the new enum
         # (PAID / PARTIALLY_PAID / UNPAID). Each statement is idempotent.

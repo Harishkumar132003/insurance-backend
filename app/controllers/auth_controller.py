@@ -9,10 +9,19 @@ from app.schemas.auth import LoginRequest
 
 def login(db: Session, payload: LoginRequest):
     user = db.query(User).filter(User.email == payload.email).first()
-    if not user or not verify_password(payload.password, user.hashed_password):
+    # Deliberately distinct messages so the login form can point at the field that
+    # is actually wrong. The trade-off is user enumeration: anyone can probe this
+    # endpoint to learn which addresses have accounts. Accepted as a product
+    # decision — add rate limiting here if that exposure needs closing.
+    if not user:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid email or password",
+            detail="No account found with this email",
+        )
+    if not verify_password(payload.password, user.hashed_password):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Incorrect password",
         )
     access_token = create_access_token(data={
         "sub": str(user.id),

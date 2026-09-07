@@ -41,6 +41,20 @@ def update_form_data(db: Session, form_data_id: int, payload: FormDataUpdate) ->
             detail="Cannot edit a submitted form",
         )
 
+    # Provider / UHID live on the parent case. Applied only when sent, so this
+    # stays a partial update like apply_sections. Guarded by the SUBMITTED check
+    # above, so a case already with the insurer can't be re-pointed mid-flight.
+    claim_case = (
+        db.query(ClaimCase).filter(ClaimCase.id == form_data.claim_case_id).first()
+        if form_data.claim_case_id else None
+    )
+    if claim_case is not None:
+        if payload.policy_provider_id is not None:
+            claim_case.policy_provider_id = payload.policy_provider_id
+        # The column is NOT NULL, so a blank must not overwrite a real UHID.
+        if payload.uhid is not None and payload.uhid.strip():
+            claim_case.uhid = payload.uhid.strip()
+
     # Per-section column update (only sections present in the payload change).
     apply_sections(db, form_data, payload.sections)
     db.commit()
