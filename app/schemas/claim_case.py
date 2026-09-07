@@ -59,7 +59,7 @@ class FormDataItem(BaseModel):
     # Composed from the typed pre_auth_* tables by the controller (set as a
     # transient `.sections` attribute before serialization).
     sections: dict[str, Any] = {}
-    draft_state: str
+    preauth_status: str
     created_at: datetime
     updated_at: datetime | None = None
 

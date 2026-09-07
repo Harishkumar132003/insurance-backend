@@ -1,4 +1,5 @@
 from sqlalchemy import Column, BigInteger, String, Integer, Boolean, Date, DateTime, ForeignKey, Index, func
+from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import relationship
 
 from app.db.base import Base
@@ -7,10 +8,13 @@ from app.db.base import Base
 class PreAuthPatient(Base):
     """Structured `patient_insured` section of the pre-auth form. 1:1 with the
     pre-auth form_data row."""
-    __tablename__ = "pre_auth_patient"
+    __tablename__ = "patient_personal_detail"
 
     id = Column(BigInteger, primary_key=True, autoincrement=True)
     form_data_id = Column(BigInteger, ForeignKey("pre_auth.id", ondelete="CASCADE"), unique=True, nullable=False)
+    # Denormalised from the case for easy lookup (source of truth: hospitalization).
+    hospitalization_id = Column(UUID(as_uuid=True), ForeignKey("hospitalization.id"), nullable=True)
+    uhid = Column(String, nullable=True)
 
     patient_name = Column(String, nullable=True)
     gender = Column(String, nullable=True)
@@ -35,5 +39,5 @@ class PreAuthPatient(Base):
     form_data = relationship("FormData", back_populates="patient")
 
     __table_args__ = (
-        Index("ix_pre_auth_patient_form_data_id", "form_data_id"),
+        Index("ix_patient_personal_detail_form_data_id", "form_data_id"),
     )

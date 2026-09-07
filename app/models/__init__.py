@@ -10,7 +10,6 @@ from app.models.form_data import FormData
 from app.models.patient import Patient
 from app.models.claim_case import ClaimCase
 from app.models.claim import Claim
-from app.models.settlement import Settlement
 from app.models.settlement_batch import SettlementBatch
 from app.models.settlement_item import SettlementItem
 from app.models.ai_chat import AiChat
@@ -29,6 +28,8 @@ from app.models.pre_auth_patient import PreAuthPatient
 from app.models.pre_auth_treatment import PreAuthTreatment
 from app.models.pre_auth_hospitalization import PreAuthHospitalization
 from app.models.case_sheet_extraction import CaseSheetExtraction
+from app.models.preauth_status_tracking import PreAuthStatusTracking
+from app.models.claim_status_tracking import ClaimStatusTracking
 from app.models.claim_bill_item import ClaimBillItem
 from app.models.invoice import Invoice
 from app.models.invoice_payment import InvoicePayment

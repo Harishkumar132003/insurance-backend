@@ -20,6 +20,9 @@ class SettlementBatch(Base):
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     hospital_id = Column(UUID(as_uuid=True), ForeignKey("hospitals.id"), nullable=False)
+    # The insurer/TPA this batch is from. tpa_insurer keeps the raw extracted
+    # text; policy_provider_id is the structured link (AI-suggested, editable).
+    policy_provider_id = Column(UUID(as_uuid=True), ForeignKey("policy_provider_configs.id"), nullable=True)
 
     # Header fields extracted from the document (all editable before save).
     tpa_insurer = Column(String, nullable=True)
@@ -49,4 +52,5 @@ class SettlementBatch(Base):
 
     __table_args__ = (
         Index("ix_settlement_batch_hospital_id", "hospital_id"),
+        Index("ix_settlement_batch_policy_provider_id", "policy_provider_id"),
     )
