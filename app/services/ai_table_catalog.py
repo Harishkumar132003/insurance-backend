@@ -160,6 +160,8 @@ TABLE_DOCS: dict = {
         "cols": {
             "form_data_id": {"d": "FK -> pre_auth.id."},
             "label": {"d": "Bill line label (e.g. room rent, pharmacy)."},
+            "bill_id": {"d": "Hospital's own bill/invoice reference for this line; "
+                             "free text, and several lines may share one bill."},
             "amount": {"d": "Line amount (money)."},
         },
     },

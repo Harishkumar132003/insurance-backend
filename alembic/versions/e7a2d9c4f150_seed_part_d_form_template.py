@@ -185,6 +185,7 @@ PART_D_HTML = r"""<!DOCTYPE html>
     <tr><td class="summary-label">Deductions Detail</td><td>:(INR) {{deductions_detail}}</td></tr>
     <tr><td class="summary-label">Discount</td><td>:(INR) {{discount}}</td></tr>
     <tr><td class="summary-label">Co-Pay</td><td>:(INR) {{co_pay}}</td></tr>
+    <tr><td class="summary-label">Zonal Disallowance</td><td>:(INR) {{zonal}}</td></tr>
     <tr><td class="summary-label">Deductibles</td><td>:(INR) {{deductibles}}</td></tr>
     <tr><td class="summary-label">Total Authorised Amount</td><td>:(INR) {{total_authorised_amount}}</td></tr>
     <tr><td class="summary-label">Amount to be paid by Insured</td><td>:(INR) {{amount_to_be_paid_by_insured}}</td></tr>

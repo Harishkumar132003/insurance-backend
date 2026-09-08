@@ -154,6 +154,9 @@ CREATE TABLE IF NOT EXISTS claim_bill_item (
     id           BIGSERIAL PRIMARY KEY,
     form_data_id BIGINT NOT NULL REFERENCES pre_auth(id) ON DELETE CASCADE,
     label        TEXT NOT NULL,
+    -- The hospital's own bill/invoice reference for this line (free text;
+    -- several lines may share one bill).
+    bill_id      TEXT,
     amount       NUMERIC(12,2) NOT NULL,
     sort_order   INTEGER NOT NULL DEFAULT 0,
     created_at   TIMESTAMPTZ NOT NULL DEFAULT now()

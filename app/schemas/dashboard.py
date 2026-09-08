@@ -111,9 +111,16 @@ class SuperAdminKPIs(BaseModel):
     action_needed_count: int = 0
     awaiting_insurer_count: int = 0
     awaiting_insurer_avg_wait_seconds: float | None = None
-    approved_cases: int = 0
-    approved_amount: float = 0.0
-    approval_rate: float | None = None         # 0..1 over decisions in window
+    # Approvals are reported PER STAGE. A case is normally approved twice --
+    # once authorising treatment at pre-auth, again settling the bill at claim
+    # -- so one combined figure added the same money twice and matched neither
+    # funnel step. Split, each side reconciles to its funnel row exactly.
+    preauth_approved_cases: int = 0
+    preauth_approved_amount: float = 0.0
+    preauth_approval_rate: float | None = None   # 0..1 over pre-auth decisions
+    claim_approved_cases: int = 0
+    claim_approved_amount: float = 0.0
+    claim_approval_rate: float | None = None     # 0..1 over claim decisions
     outstanding_receivables_amount: float = 0.0
     outstanding_receivables_count: int = 0
 

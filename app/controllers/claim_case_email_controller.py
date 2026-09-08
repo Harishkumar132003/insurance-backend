@@ -623,6 +623,7 @@ def process_by_provider(
     attachment_filename: str | None = None,
     attachment_content_type: str | None = None,
     approved_breakdown: list[dict] | None = None,
+    deductions: dict | None = None,
 ):
     from app.controllers.claim_case_controller import (
         AWAITING_PROVIDER_STATUSES,
@@ -763,6 +764,11 @@ def process_by_provider(
     # View Form modal can render it. Each entry is {label, claimed, approved}.
     if approved_breakdown is not None:
         provider_form_values["approved_breakdown"] = approved_breakdown
+    # Bill-level disallowances applied on top of the per-line cuts. Stored so
+    # the hospital can see what came off and why; `approved_amount` above is
+    # already net of them.
+    if deductions is not None:
+        provider_form_values["deductions"] = deductions
 
     # Synthetic RECEIVED email so the existing timeline renders this action
     # the same way as an AI-extracted reply from an external provider.

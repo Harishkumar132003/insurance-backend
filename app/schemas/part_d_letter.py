@@ -45,7 +45,13 @@ class PartDLetterFields(BaseModel):
     # ── Numeric authorisation summary (computed in the modal) ──
     as_total_bill_amount: float | None = None
     as_discount: float | None = None
+    # Bill-level disallowances: an amount plus the reason it was applied. The
+    # approver types both — no zone or co-pay rate is stored anywhere to derive
+    # them from.
     as_co_pay: float | None = None
+    co_pay_reason: str | None = None
+    as_zonal: float | None = None
+    zonal_reason: str | None = None
     as_deductibles: float | None = None
     as_deductions: float | None = None
     as_amount_to_be_paid_by_insured: float | None = None

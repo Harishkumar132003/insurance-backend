@@ -71,7 +71,14 @@ class PartDLetter(Base):
     # total_authorised == approved_amount (the canonical figure).
     as_total_bill_amount = Column(Numeric(12, 2), nullable=True)
     as_discount = Column(Numeric(12, 2), nullable=True)
+    # Co-pay is the insured's share; zonal covers treatment taken outside the
+    # policy's zone. Both are bill-level disallowances entered by the approver
+    # (nothing in the system stores a zone or a co-pay rate to derive them
+    # from), and each must be explained when it is non-zero.
     as_co_pay = Column(Numeric(12, 2), nullable=True)
+    co_pay_reason = Column(String, nullable=True)
+    as_zonal = Column(Numeric(12, 2), nullable=True)
+    zonal_reason = Column(String, nullable=True)
     as_deductibles = Column(Numeric(12, 2), nullable=True)
     as_deductions = Column(Numeric(12, 2), nullable=True)
     as_amount_to_be_paid_by_insured = Column(Numeric(12, 2), nullable=True)

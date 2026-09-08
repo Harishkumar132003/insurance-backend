@@ -94,6 +94,7 @@ async def provider_action(
     file_content_type: str | None = None
 
     approved_breakdown = None
+    deductions = None
     if content_type.startswith("multipart/form-data"):
         form = await request.form()
         new_status = form.get("status")
@@ -118,6 +119,18 @@ async def provider_action(
                     approved_breakdown = parsed
             except (ValueError, TypeError):
                 approved_breakdown = None
+        # Bill-level disallowances (zonal / co-pay), grouped as one JSON object
+        # so a new type needs no new form field. Parsed exactly like the
+        # breakdown above; `approved_amount` already arrives net of these.
+        deductions_raw = form.get("deductions")
+        if deductions_raw:
+            try:
+                import json as _json
+                parsed_d = _json.loads(deductions_raw)
+                if isinstance(parsed_d, dict):
+                    deductions = parsed_d
+            except (ValueError, TypeError):
+                deductions = None
     else:
         try:
             body = await request.json()
@@ -141,6 +154,9 @@ async def provider_action(
         bd = body.get("approved_breakdown")
         if isinstance(bd, list):
             approved_breakdown = bd
+        dd = body.get("deductions")
+        if isinstance(dd, dict):
+            deductions = dd
 
     if not new_status:
         raise HTTPException(
@@ -173,6 +189,7 @@ async def provider_action(
         attachment_filename=file_name,
         attachment_content_type=file_content_type,
         approved_breakdown=approved_breakdown,
+        deductions=deductions,
     )
 
 

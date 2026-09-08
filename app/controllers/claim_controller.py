@@ -73,6 +73,7 @@ def _build_response(
             bill_breakdown.append(
                 BillBreakdownItem(
                     label=item.label,
+                    bill_id=item.bill_id,
                     amount=Decimal(str(item.amount)),
                     rate=Decimal(str(item.rate)) if item.rate is not None else None,
                     days=item.days,
@@ -252,7 +253,8 @@ def raise_claim(
         body=payload.email_body,
         form_values={
             "bill_breakdown": [
-                {"label": i.label, "amount": str(i.amount)} for i in payload.bill_breakdown
+                {"label": i.label, "bill_id": i.bill_id, "amount": str(i.amount)}
+                for i in payload.bill_breakdown
             ],
             "claimed_amount": str(payload.claimed_amount),
             "remarks": payload.remarks,
@@ -350,6 +352,7 @@ def _replace_bill_items(db: Session, form_data: FormData, items) -> None:
         db.add(ClaimBillItem(
             form_data_id=form_data.id,
             label=it.label,
+            bill_id=getattr(it, "bill_id", None),
             amount=it.amount,
             rate=getattr(it, "rate", None),
             days=getattr(it, "days", None),
@@ -376,6 +379,7 @@ def _draft_to_response(draft: FormData | None) -> ClaimDraftResponse:
     items = [
         BillBreakdownItem(
             label=it.label,
+            bill_id=it.bill_id,
             amount=Decimal(str(it.amount)),
             rate=Decimal(str(it.rate)) if it.rate is not None else None,
             days=it.days,
