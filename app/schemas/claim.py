@@ -9,6 +9,10 @@ from app.schemas.claim_case_document import ClaimCaseDocumentResponse
 
 class BillBreakdownItem(BaseModel):
     label: str
+    # Per-line hospital bill reference. Optional here so claims stored before
+    # the column existed still validate on read; the Raise Claim form requires
+    # it on submit.
+    bill_id: str | None = None
     amount: Decimal
     # Per-day lines carry the rate + day count; flat lines leave these None.
     rate: Decimal | None = None

@@ -110,15 +110,44 @@ def _kpis(db: Session, params: dict) -> SuperAdminKPIs:
 
     # Approval activity in window — events whose status_history.created_at
     # falls in the range (an old case can still be decided this week).
+    #
+    # Split by STAGE, not by status name: the claim stage reuses 'APPROVED' /
+    # 'PARTIALLY_APPROVED', so only sh.stage separates authorising treatment
+    # from settling the bill. Reported separately because a case is normally
+    # approved once at each -- summing both counted the same money twice.
+    #
+    # Now also joins hospitalization to drop CANCELLED cases, which this query
+    # alone was counting while every other panel excluded them.
     decisions = db.execute(text("""
-        SELECT COUNT(DISTINCT sh.claim_case_id)
-                 FILTER (WHERE sh.status = ANY(:approved_statuses)) AS approved_cases,
-               COALESCE(SUM(sh.approved_amount)
-                 FILTER (WHERE sh.status = ANY(:approved_statuses)), 0) AS approved_amount,
-               COUNT(*) FILTER (WHERE sh.status = ANY(:approved_statuses)) AS approved,
-               COUNT(*) FILTER (WHERE sh.status = ANY(:denied_statuses))   AS denied
+        SELECT
+          COUNT(DISTINCT sh.claim_case_id) FILTER (
+            WHERE sh.stage <> 'CLAIM' AND sh.status = ANY(:approved_statuses)
+          ) AS preauth_cases,
+          COALESCE(SUM(sh.approved_amount) FILTER (
+            WHERE sh.stage <> 'CLAIM' AND sh.status = ANY(:approved_statuses)
+          ), 0) AS preauth_amount,
+          COUNT(*) FILTER (
+            WHERE sh.stage <> 'CLAIM' AND sh.status = ANY(:approved_statuses)
+          ) AS preauth_approved,
+          COUNT(*) FILTER (
+            WHERE sh.stage <> 'CLAIM' AND sh.status = ANY(:denied_statuses)
+          ) AS preauth_denied,
+          COUNT(DISTINCT sh.claim_case_id) FILTER (
+            WHERE sh.stage = 'CLAIM' AND sh.status = ANY(:approved_statuses)
+          ) AS claim_cases,
+          COALESCE(SUM(sh.approved_amount) FILTER (
+            WHERE sh.stage = 'CLAIM' AND sh.status = ANY(:approved_statuses)
+          ), 0) AS claim_amount,
+          COUNT(*) FILTER (
+            WHERE sh.stage = 'CLAIM' AND sh.status = ANY(:approved_statuses)
+          ) AS claim_approved,
+          COUNT(*) FILTER (
+            WHERE sh.stage = 'CLAIM' AND sh.status = ANY(:denied_statuses)
+          ) AS claim_denied
           FROM status_history sh
-         WHERE sh.created_at >= :since
+          JOIN hospitalization h ON h.id = sh.claim_case_id
+         WHERE h.case_status <> 'CANCELLED'
+           AND sh.created_at >= :since
            AND sh.created_at <  :until
     """), {
         **params,
@@ -150,7 +179,8 @@ def _kpis(db: Session, params: dict) -> SuperAdminKPIs:
          WHERE approved > settled
     """)).mappings().first()
 
-    decided = (decisions["approved"] or 0) + (decisions["denied"] or 0)
+    pre_decided = (decisions["preauth_approved"] or 0) + (decisions["preauth_denied"] or 0)
+    cl_decided = (decisions["claim_approved"] or 0) + (decisions["claim_denied"] or 0)
     return SuperAdminKPIs(
         total_cases=row["total_cases"] or 0,
         action_needed_count=row["action_needed"] or 0,
@@ -158,9 +188,14 @@ def _kpis(db: Session, params: dict) -> SuperAdminKPIs:
         awaiting_insurer_avg_wait_seconds=(
             float(row["awaiting_avg_seconds"]) if row["awaiting_avg_seconds"] is not None else None
         ),
-        approved_cases=decisions["approved_cases"] or 0,
-        approved_amount=float(decisions["approved_amount"] or 0),
-        approval_rate=(decisions["approved"] / decided) if decided else None,
+        preauth_approved_cases=decisions["preauth_cases"] or 0,
+        preauth_approved_amount=float(decisions["preauth_amount"] or 0),
+        preauth_approval_rate=(
+            decisions["preauth_approved"] / pre_decided) if pre_decided else None,
+        claim_approved_cases=decisions["claim_cases"] or 0,
+        claim_approved_amount=float(decisions["claim_amount"] or 0),
+        claim_approval_rate=(
+            decisions["claim_approved"] / cl_decided) if cl_decided else None,
         outstanding_receivables_amount=float(receivables["outstanding"] or 0),
         outstanding_receivables_count=receivables["case_count"] or 0,
     )

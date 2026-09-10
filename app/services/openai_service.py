@@ -83,7 +83,6 @@ POLICY_SUMMARY_SCHEMA = {
                     "medicines_cost",
                     "other_expenses",
                     "package_charges",
-                    "total_cost",
                 ],
                 "properties": {
                     "room_rent": {"type": ["string", "null"]},
@@ -94,7 +93,12 @@ POLICY_SUMMARY_SCHEMA = {
                     "medicines_cost": {"type": ["string", "null"]},
                     "other_expenses": {"type": ["string", "null"]},
                     "package_charges": {"type": ["string", "null"]},
-                    "total_cost": {"type": ["string", "null"]},
+                    # No `total_cost`: room_rent and icu_charges are per-day
+                    # RATES, so the only correct total multiplies them by their
+                    # day counts -- which the extractor cannot know. It used to
+                    # emit a flat sum here, understating every multi-day stay
+                    # and blocking approval downstream. The client derives the
+                    # total from the line items instead (deriveCosts).
                 },
             },
         },

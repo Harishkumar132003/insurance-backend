@@ -194,7 +194,7 @@ Return ONLY valid JSON, no other text.
 
 
 def process_unread_emails():
-    """Main function called by the scheduler every 2 minutes."""
+    """Main function called by the scheduler on each poll interval."""
     if not settings.EMAIL_ADDRESS or not settings.EMAIL_APP_PASSWORD:
         logger.warning("Email credentials not configured, skipping email check")
         return
@@ -379,7 +379,11 @@ def _analyze_email_with_openai(subject: str, body: str, from_email: str) -> dict
     prompt = OPENAI_PROMPT.format(subject=subject, from_email=from_email, body=body[:10000])
 
     try:
-        client = OpenAI(api_key=settings.OPENAI_API_KEY)
+        client = OpenAI(
+            api_key=settings.OPENAI_API_KEY,
+            timeout=OPENAI_TIMEOUT_SECONDS,
+            max_retries=OPENAI_MAX_RETRIES,
+        )
         response = client.chat.completions.create(
             model="gpt-4o-mini",
             messages=[{"role": "user", "content": prompt}],
@@ -541,7 +545,11 @@ def _analyze_claim_email_with_openai(subject: str, body: str, from_email: str) -
         subject=subject, from_email=from_email, body=body[:10000],
     )
     try:
-        client = OpenAI(api_key=settings.OPENAI_API_KEY)
+        client = OpenAI(
+            api_key=settings.OPENAI_API_KEY,
+            timeout=OPENAI_TIMEOUT_SECONDS,
+            max_retries=OPENAI_MAX_RETRIES,
+        )
         response = client.chat.completions.create(
             model="gpt-4o-mini",
             messages=[{"role": "user", "content": prompt}],
@@ -620,10 +628,25 @@ def _match_claim_case(
     return None
 
 
+# Seconds. Generous on purpose — a mailbox with large attachments can take a
+# while to FETCH — but FINITE, which is the whole point. Python's default socket
+# timeout is None, so without this a half-open connection (NAT/firewall idle
+# drop, container network blip, Gmail throttling) blocks the reader thread
+# forever. The scheduler runs this job with max_instances=1, so one hung call
+# silently stops ALL email processing until the process restarts, leaving only
+# "maximum number of running instances reached" in the log.
+IMAP_TIMEOUT_SECONDS = 60
+
+# Seconds per OpenAI request, per attempt. The SDK retries on top of this, so
+# the worst case for one email is roughly OPENAI_TIMEOUT * (1 + max_retries).
+OPENAI_TIMEOUT_SECONDS = 120
+OPENAI_MAX_RETRIES = 2
+
+
 def _fetch_unread_emails() -> list[dict]:
     """Fetch unread emails from inbox via IMAP."""
     try:
-        mail = imaplib.IMAP4_SSL("imap.gmail.com", 993)
+        mail = imaplib.IMAP4_SSL("imap.gmail.com", 993, timeout=IMAP_TIMEOUT_SECONDS)
         mail.login(settings.EMAIL_ADDRESS, settings.EMAIL_APP_PASSWORD)
         mail.select("INBOX")
 

@@ -168,6 +168,9 @@ CREATE TABLE IF NOT EXISTS claim_bill_item (
     hospitalization_id UUID NOT NULL
                          REFERENCES hospitalization(id) ON DELETE CASCADE,
     label              TEXT NOT NULL,
+    -- The hospital's own bill/invoice reference for this line (free text;
+    -- several lines may share one bill).
+    bill_id            TEXT,
     amount             NUMERIC(12,2) NOT NULL,
     -- Per-day lines carry rate/days; NULL on flat lines.
     rate               NUMERIC(12,2),

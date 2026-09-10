@@ -133,10 +133,10 @@ def get_hospital_admin_dashboard(
         funnel=_funnel(db, params),
         recent_activity=_recent_activity(db, params),
         insurers=_insurers(db, params),
-        status_distribution=_status_distribution(db, hospital_id),
+        status_distribution=_status_distribution(db, params),
         volume_trend=_volume_trend(db, params),
         top_diagnoses=_top_diagnoses(db, params),
-        adr_resolution_days=_adr_resolution_days(db, hospital_id),
+        adr_resolution_days=_adr_resolution_days(db, params),
         cancellation_reasons=_cancellation_reasons(db, params),
     )
 
@@ -181,10 +181,14 @@ def _kpis(db: Session, params: dict) -> DashboardKPIs:
     }).mappings().first()
 
     # Outstanding receivables — approved claim money the insurer has not settled
-    # yet, on cases born in range. Settlement remittance is the source of truth
-    # for what was actually paid; the old invoice record was self-reported.
-    # Clamped at 0 so an over-settlement on one case cannot mask a genuine
-    # shortfall on another.
+    # yet. This is a BALANCE, not a flow: "what we are owed right now", so it is
+    # deliberately NOT limited to the selected date range. It used to filter on
+    # h.created_at, which hid every older unpaid case — the money you chase
+    # hardest — and made this card disagree with the identically-named
+    # super-admin KPI, which was always a live snapshot.
+    # Settlement remittance is the source of truth for what was actually paid;
+    # the old invoice record was self-reported. Clamped at 0 so an
+    # over-settlement on one case cannot mask a genuine shortfall on another.
     receivables = db.execute(text("""
         WITH per_case AS (
             SELECT h.id,
@@ -197,8 +201,6 @@ def _kpis(db: Session, params: dict) -> DashboardKPIs:
               FROM hospitalization h
               JOIN claims cl ON cl.hospitalization_id = h.id
              WHERE h.hospital_id = :hospital_id
-               AND h.created_at >= :since
-               AND h.created_at <  :until
                AND h.case_status <> 'CANCELLED'
                AND cl.approved_amount IS NOT NULL AND cl.approved_amount > 0
              GROUP BY h.id
@@ -207,7 +209,7 @@ def _kpis(db: Session, params: dict) -> DashboardKPIs:
                COALESCE(SUM(approved - settled), 0) AS outstanding
           FROM per_case
          WHERE approved > settled
-    """), params).mappings().first()
+    """), {"hospital_id": params["hospital_id"]}).mappings().first()
 
     # Cancelled in period — dated by the cancellation event, not by when the
     # case was created, so an older case cancelled this week still counts.
@@ -256,12 +258,18 @@ def _funnel(db: Session, params: dict) -> list[FunnelStep]:
                AND case_status <> 'CANCELLED'
         ),
         requested AS (
-            -- Latest PRE_AUTH form per case, summed.
-            SELECT COUNT(DISTINCT pa.hospitalization_id) AS cnt,
-                   COALESCE(SUM(s.total_cost), 0)    AS amt
-              FROM cases c
-              JOIN pre_auth pa ON pa.hospitalization_id = c.id
-              JOIN pre_auth_stay s ON s.form_data_id = pa.id
+            -- Latest PRE_AUTH form per case, summed. DISTINCT ON is what makes
+            -- that true: the plain join added every PRE_AUTH form a case had,
+            -- so a second one would silently inflate the requested total.
+            SELECT COUNT(*) AS cnt, COALESCE(SUM(total_cost), 0) AS amt
+              FROM (
+                SELECT DISTINCT ON (pa.hospitalization_id)
+                       pa.hospitalization_id, s.total_cost
+                  FROM cases c
+                  JOIN pre_auth pa ON pa.hospitalization_id = c.id
+                  JOIN pre_auth_stay s ON s.form_data_id = pa.id
+                 ORDER BY pa.hospitalization_id, pa.created_at DESC, pa.id DESC
+              ) latest_form
         ),
         approved AS (
             SELECT COUNT(*) AS cnt,
@@ -363,15 +371,26 @@ def _insurers(db: Session, params: dict) -> list[InsurerStats]:
                AND h.created_at <  :until
                AND h.case_status <> 'CANCELLED'
         ),
-        decisions AS (
-            -- Each status_history row that's an approval or denial counts as
-            -- one decision; we average by provider.
-            SELECT c.policy_provider_id,
-                   COUNT(*) FILTER (WHERE sh.status = ANY(:approved_statuses)) AS approved,
-                   COUNT(*) FILTER (WHERE sh.status = ANY(:denied_statuses))   AS denied
+        latest_decision AS (
+            -- One row per case: its most recent approve/deny outcome. Counting
+            -- raw status_history rows instead made `approved` count decision
+            -- EVENTS -- a case decided at pre-auth, enhancement and claim
+            -- contributed 3 -- so `approved` could exceed `cases` and sat
+            -- nonsensically beside it.
+            SELECT DISTINCT ON (sh.claim_case_id)
+                   c.policy_provider_id, sh.claim_case_id, sh.status
               FROM cases c
               JOIN status_history sh ON sh.claim_case_id = c.id
-             GROUP BY c.policy_provider_id
+             WHERE sh.status = ANY(:approved_statuses)
+                OR sh.status = ANY(:denied_statuses)
+             ORDER BY sh.claim_case_id, sh.created_at DESC
+        ),
+        decisions AS (
+            SELECT policy_provider_id,
+                   COUNT(*) FILTER (WHERE status = ANY(:approved_statuses)) AS approved,
+                   COUNT(*) FILTER (WHERE status = ANY(:denied_statuses))   AS denied
+              FROM latest_decision
+             GROUP BY policy_provider_id
         ),
         tats AS (
             -- TAT = first RECEIVED reply minus first SENT email per case.
@@ -456,37 +475,61 @@ def _insurers(db: Session, params: dict) -> list[InsurerStats]:
 
 # ─── Status distribution ──────────────────────────────────────────────
 
-def _status_distribution(db: Session, hospital_id: UUID) -> list[StatusBucket]:
-    """Five buckets covering the open pipeline."""
+def _status_distribution(db: Session, params: dict) -> list[StatusBucket]:
+    """Five buckets covering the open pipeline, scoped to the active date range.
+
+    Each case lands in AT MOST ONE bucket. The old version used five
+    independent COUNT(*) FILTER predicates, which double-counted any case that
+    satisfied two of them (e.g. still SUBMITTED but already carrying an
+    approved amount), so the buckets did not sum to the case count.
+
+    A single CASE assigns one bucket per case, in this precedence:
+    anything awaiting an insurer decision is reported as awaiting, because
+    that is the state the hospital acts on; only then do we fall through to
+    "approved, nothing sent yet". DRAFT cases are deliberately excluded --
+    nothing has been submitted, so they are not in the pipeline yet.
+    """
     row = db.execute(text("""
+        WITH bucketed AS (
+            SELECT CASE
+                WHEN h.current_stage = 'CLAIM' AND h.case_status = 'CLAIM_SUBMITTED'
+                    THEN 'claim_submitted'
+                WHEN EXISTS (SELECT 1 FROM settlement_item si WHERE si.hospitalization_id = h.id)
+                     AND (SELECT COALESCE(SUM(si.settled_amount), 0) FROM settlement_item si
+                           WHERE si.hospitalization_id = h.id)
+                         < (SELECT COALESCE(SUM(c.approved_amount), 0) FROM claims c
+                             WHERE c.hospitalization_id = h.id)
+                    THEN 'partially_settled'
+                WHEN EXISTS (SELECT 1 FROM claims c WHERE c.hospitalization_id = h.id
+                               AND c.approved_amount IS NOT NULL AND c.approved_amount > 0)
+                     AND NOT EXISTS (SELECT 1 FROM settlement_item WHERE hospitalization_id = h.id)
+                    THEN 'awaiting_settlement'
+                WHEN h.current_stage = 'PRE_AUTH'
+                     AND h.case_status = ANY(:awaiting_statuses)
+                    THEN 'pre_auth_submitted'
+                WHEN h.current_stage = 'PRE_AUTH'
+                     AND h.approved_amount IS NOT NULL AND h.approved_amount > 0
+                     AND NOT EXISTS (SELECT 1 FROM claims WHERE hospitalization_id = h.id)
+                    THEN 'pre_auth_approved'
+                ELSE NULL
+            END AS bucket
+              FROM hospitalization h
+             WHERE h.hospital_id = :hospital_id
+               AND h.case_status <> 'CANCELLED'
+               AND h.created_at >= :since
+               AND h.created_at <  :until
+        )
         SELECT
-            COUNT(*) FILTER (
-                WHERE h.current_stage = 'PRE_AUTH' AND h.case_status = 'SUBMITTED'
-            ) AS pre_auth_submitted,
-            COUNT(*) FILTER (
-                WHERE h.current_stage = 'PRE_AUTH'
-                  AND h.approved_amount IS NOT NULL AND h.approved_amount > 0
-                  AND NOT EXISTS (SELECT 1 FROM claims WHERE hospitalization_id = h.id)
-            ) AS pre_auth_approved,
-            COUNT(*) FILTER (
-                WHERE h.current_stage = 'CLAIM' AND h.case_status = 'CLAIM_SUBMITTED'
-            ) AS claim_submitted,
-            COUNT(*) FILTER (
-                WHERE EXISTS (SELECT 1 FROM claims c WHERE c.hospitalization_id = h.id
-                                AND c.approved_amount IS NOT NULL AND c.approved_amount > 0)
-                  AND NOT EXISTS (SELECT 1 FROM settlement_item WHERE hospitalization_id = h.id)
-            ) AS awaiting_settlement,
-            COUNT(*) FILTER (
-                WHERE EXISTS (SELECT 1 FROM settlement_item si WHERE si.hospitalization_id = h.id)
-                  AND (SELECT COALESCE(SUM(si.settled_amount), 0) FROM settlement_item si
-                        WHERE si.hospitalization_id = h.id)
-                      < (SELECT COALESCE(SUM(c.approved_amount), 0) FROM claims c
-                          WHERE c.hospitalization_id = h.id)
-            ) AS partially_settled
-          FROM hospitalization h
-         WHERE h.hospital_id = :hospital_id
-           AND h.case_status <> 'CANCELLED'
-    """), {"hospital_id": hospital_id}).mappings().first()
+            COUNT(*) FILTER (WHERE bucket = 'pre_auth_submitted')  AS pre_auth_submitted,
+            COUNT(*) FILTER (WHERE bucket = 'pre_auth_approved')   AS pre_auth_approved,
+            COUNT(*) FILTER (WHERE bucket = 'claim_submitted')     AS claim_submitted,
+            COUNT(*) FILTER (WHERE bucket = 'awaiting_settlement') AS awaiting_settlement,
+            COUNT(*) FILTER (WHERE bucket = 'partially_settled')   AS partially_settled
+          FROM bucketed
+    """), {
+        **params,
+        "awaiting_statuses": list(AWAITING_INSURER_STATUSES),
+    }).mappings().first()
 
     return [
         StatusBucket(key="pre_auth_submitted", label="Pre-Auth Submitted",   count=row["pre_auth_submitted"] or 0),
@@ -500,9 +543,22 @@ def _status_distribution(db: Session, hospital_id: UUID) -> list[StatusBucket]:
 # ─── Volume trend ─────────────────────────────────────────────────────
 
 def _volume_trend(db: Session, params: dict) -> list[VolumePoint]:
-    """Submitted vs Settled per ISO week. The bucket series is generated
+    """Claims Submitted vs Settled per ISO week. The bucket series is generated
     inside the picked [since, until) range, so the chart always matches the
-    selector."""
+    selector.
+
+    Tracks CLAIM submissions only. It used to also count pre-auth submissions,
+    which meant one case contributed twice over its life (once at pre-auth,
+    again when the claim was raised) and the bar could not be read as a claim
+    count.
+
+    The filter is on `stage`, not on a 'CLAIM_SUBMITTED' status: no such status
+    is ever written to status_history. A claim submission is stage='CLAIM' with
+    status='SUBMITTED' -- the old `status IN ('SUBMITTED','CLAIM_SUBMITTED')`
+    matched claim rows only through the generic 'SUBMITTED' arm, and the
+    'CLAIM_SUBMITTED' literal was dead. CLAIM_ADR_SUBMITTED is excluded: it is a
+    document response inside the claim stage, not a claim being raised.
+    """
     rows = db.execute(text("""
         WITH series AS (
             SELECT generate_series(
@@ -517,7 +573,9 @@ def _volume_trend(db: Session, params: dict) -> list[VolumePoint]:
               FROM status_history sh
               JOIN hospitalization h ON h.id = sh.claim_case_id
              WHERE h.hospital_id = :hospital_id
-               AND sh.status IN ('SUBMITTED', 'CLAIM_SUBMITTED')
+               AND h.case_status <> 'CANCELLED'   -- every other panel excludes these
+               AND sh.stage = 'CLAIM'
+               AND sh.status = 'SUBMITTED'
                AND sh.created_at >= :since
                AND sh.created_at <  :until
              GROUP BY 1
@@ -577,7 +635,12 @@ def _top_diagnoses(db: Session, params: dict, limit: int = 5) -> list[DiagnosisS
 
 # ─── ADR resolution time ──────────────────────────────────────────────
 
-def _adr_resolution_days(db: Session, hospital_id: UUID) -> float | None:
+def _adr_resolution_days(db: Session, params: dict) -> float | None:
+    """Average ADR turnaround for queries RAISED inside the active range.
+
+    Previously unscoped, so the figure shown beside a 30-day header could be
+    an all-time average drawn entirely from outside the window.
+    """
     row = db.execute(text("""
         SELECT AVG(EXTRACT(EPOCH FROM (q.resolved_at - q.created_at)) / 86400.0) AS avg_days
           FROM query_logs q
@@ -585,7 +648,9 @@ def _adr_resolution_days(db: Session, hospital_id: UUID) -> float | None:
          WHERE h.hospital_id = :hospital_id
            AND q.query_type = 'ADR_NMI'
            AND q.resolved_at IS NOT NULL
-    """), {"hospital_id": hospital_id}).mappings().first()
+           AND q.created_at >= :since
+           AND q.created_at <  :until
+    """), params).mappings().first()
     val = row["avg_days"] if row else None
     return float(val) if val is not None else None
 

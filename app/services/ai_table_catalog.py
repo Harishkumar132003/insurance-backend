@@ -197,6 +197,8 @@ TABLE_DOCS: dict = {
         "cols": {
             "hospitalization_id": {"d": "FK -> hospitalization.id (the case)."},
             "label": {"d": "Bill line label (e.g. room rent, pharmacy)."},
+            "bill_id": {"d": "Hospital's own bill/invoice reference for this line; "
+                             "free text, and several lines may share one bill."},
             "amount": {"d": "Line amount (money)."},
         },
     },

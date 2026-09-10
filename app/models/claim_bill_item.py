@@ -17,6 +17,10 @@ class ClaimBillItem(Base):
         UUID(as_uuid=True), ForeignKey("hospitalization.id", ondelete="CASCADE"), nullable=False
     )
     label = Column(String, nullable=False)
+    # The hospital's own bill / invoice reference for this line. Free text --
+    # hospitals number bills their own way, and several lines often share one
+    # bill. Nullable for claims raised before the column existed.
+    bill_id = Column(String, nullable=True)
     amount = Column(Numeric(12, 2), nullable=False)
     # Per-day lines (e.g. Non ICU Room / ICU Charges): amount == rate * days.
     # NULL for flat lines — a line is "per day" when rate is not NULL.

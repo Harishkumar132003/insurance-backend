@@ -223,7 +223,8 @@ def raise_claim(
         body=payload.email_body,
         form_values={
             "bill_breakdown": [
-                {"label": i.label, "amount": str(i.amount)} for i in payload.bill_breakdown
+                {"label": i.label, "bill_id": i.bill_id, "amount": str(i.amount)}
+                for i in payload.bill_breakdown
             ],
             "claimed_amount": str(payload.claimed_amount),
             "remarks": payload.remarks,
@@ -326,6 +327,7 @@ def _bill_breakdown_for_case(db: Session, claim_case_id) -> list[BillBreakdownIt
     return [
         BillBreakdownItem(
             label=it.label,
+            bill_id=it.bill_id,
             amount=Decimal(str(it.amount)),
             rate=Decimal(str(it.rate)) if it.rate is not None else None,
             days=it.days,
@@ -343,6 +345,7 @@ def _replace_bill_items(db: Session, claim_case_id, items) -> None:
         db.add(ClaimBillItem(
             hospitalization_id=claim_case_id,
             label=it.label,
+            bill_id=getattr(it, "bill_id", None),
             amount=it.amount,
             rate=getattr(it, "rate", None),
             days=getattr(it, "days", None),
